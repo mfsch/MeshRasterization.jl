@@ -56,15 +56,93 @@ let mesh = loadmesh("single-cube.stl")
 	MeshViz.viz(mesh, showfacets=true, color=1:Meshes.nelements(mesh))
 end
 
+# ╔═╡ 82d773d2-a328-41ca-b5c6-1836a393d6da
+md"## Rasterize 2D Polygons"
+
+# ╔═╡ 17854bbc-543c-42bd-a126-943edda8c75a
+md"### Tests"
+
+# ╔═╡ 0d7b073f-90a3-4588-b4d1-5cc0b14e2bc5
+md"### Benchmarks"
+
+# ╔═╡ 3c555464-59e2-4c98-bdfe-f64891f6b569
+md"### Allocations"
+
+# ╔═╡ 342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
+md"## Rasterize 3D Prisms"
+
+# ╔═╡ 73dfeea2-3faf-458c-ad41-7d592a581479
+struct Prism{Dim,T,V<:AbstractVector{Meshes.Point{Dim,T}}} <: Meshes.Polyhedron{Dim,T}
+	base::V # should be oriented such that the normal and the side are colinear
+    side::Meshes.Vec{Dim,T}
+
+	function Prism(base::V, side, fix=true) where {Dim,T,V<:AbstractVector{Meshes.Point{Dim,T}}}
+		if fix && sign(Meshes.dot(Meshes.cross(base[2]-base[1], base[3]-base[1]), side)) != 1
+			base = reverse(base)
+		end
+		new{Dim,T,V}(base, side)
+	end
+end
+
+# ╔═╡ c3ce016a-b6bb-4bf6-aa48-4f5da7818c77
+begin
+	connections(p::Prism, rank) = if rank == 0
+		Meshes.Vec((1,), (2,), (3,), (4,), (5,), (6,))
+	elseif rank == 1
+		Meshes.Vec((1,2), (2,3), (3,1), (1,4), (2,5), (3,6), (4,5), (5,6), (6,4))
+	elseif rank == 2
+		Meshes.Vec((3,2,1),(5,4,1,2),(3,6,5,2),(1,4,6,3),(5,6,4))
+	elseif rank == 3
+		Meshes.Vec((1, 2, 3, 4, 5, 6))
+	else
+		error("Invalid rank '$rank' for prism")
+	end
+	Meshes.boundary(p::Prism) = Meshes.SimpleMesh(Meshes.vertices(p), Meshes.connect.(connections(p, 2)))
+
+	Meshes.nvertices(p::Prism) = 6
+	Meshes.vertices(p::Prism) = Meshes.Vec(p.base[1], p.base[2], p.base[3],
+		p.base[1] + p.side, p.base[2] + p.side, p.base[3] + p.side)
+
+	nedges(p::Meshes.Polytope) = Meshes.nfaces(Meshes.boundary(p), 1)
+	nedges(p::Prism) = 9
+	edges(p::Meshes.Polytope) = Meshes.faces(Meshes.boundary(p), 1)
+	edges(p::Prism) = let v = Meshes.vertices(p), c = connections(p, 1)
+		(Meshes.materialize(Meshes.connect(c), v) for c in c)
+	end
+
+	Meshes.nfacets(p::Meshes.Polytope) = Meshes.nfaces(Meshes.boundary(p), Meshes.paramdim(p)-1)
+	Meshes.nfacets(p::Prism) = 5
+	Meshes.facets(p::Meshes.Polytope) = Meshes.faces(Meshes.boundary(p), Meshes.paramdim(p)-1)
+	Meshes.facets(p::Prism) = let v = Meshes.vertices(p), c = connections(p, 2)
+		(Meshes.materialize(Meshes.connect(c), v) for c in c)
+	end
+
+	Meshes.nfaces(p::Meshes.Polytope, rank) = if rank == 0
+		Meshes.nvertices(p)
+	elseif rank == 1
+		nedges(p)
+	elseif rank == Meshes.paramdim(p) - 1
+		Meshes.nfacets(p)
+	else
+		Meshes.nfaces(Meshes.boundary(p), rank)
+	end
+	Meshes.faces(p::Meshes.Polytope, rank) = if rank == 0
+		Meshes.vertices(p)
+	elseif rank == 1
+		edges(p)
+	elseif rank == Meshes.paramdim(p) - 1
+		Meshes.facets(p)
+	else
+		Meshes.faces(Meshes.boundary(p), 1)
+	end
+end
+
 # ╔═╡ 34b3f98c-1053-4aa7-ae0f-4aff49998c82
 let dims = (3, 3, 3), origin = (0.25, 0.25, 0.25), spacing = (0.5, 0.5, 0.5)
 	gd = Meshes.CartesianGrid(dims, origin, spacing)
 	gd = Meshes.vertices(gd)
 	MeshViz.viz(gd, size=10)
 end
-
-# ╔═╡ 82d773d2-a328-41ca-b5c6-1836a393d6da
-md"## Rasterize 2D Polygons"
 
 # ╔═╡ a45d21c3-ea3b-4d11-8a4a-be519f1d7719
 begin
@@ -82,7 +160,7 @@ begin
 					   ::TraverseGrid;
 					   verbose = false) where {N,T}
 		verbose && println("Rasterize by traversing $(join(size(grid), '×')) grid:")
-		
+
 		lininds = LinearIndices(size(grid))
 		Iterators.filter(CartesianIndices(size(grid))) do i
 			pt = Meshes.centroid(grid[lininds[i]])
@@ -98,11 +176,11 @@ begin
 
 	function rasterize(box::Meshes.Box{N,T}, grid::Meshes.CartesianGrid{N,T}) where {N,T}
 		dx = Meshes.spacing(grid)
-		imin = (minimum(box) - minimum(grid)) ./ dx .+ 1|>
+		imin = (minimum(box) - minimum(grid)) ./ dx .+ 1 |>
 			i -> floor.(Int, i) |>
-			i -> max.(i, (1, 1))
-		imax = (maximum(box) - minimum(grid)) ./ dx .+ 1|>
-			i -> floor.(Int, i) |>
+			i -> max.(i, 1)
+		imax = (maximum(box) - minimum(grid)) ./ dx |>
+			i -> ceil.(Int, i) |>
 			i -> min.(i, size(grid))
 		inds = ntuple(i -> imin[i]:imax[i], N)
 		CartesianIndices(inds)
@@ -119,7 +197,7 @@ begin
 
 		inds = rasterize(Meshes.boundingbox(ngon), grid)
 		verbose && println("Rasterize by traversing $(join(size(inds), '×')) bounding box:")
-		
+
 		Iterators.filter(inds) do i
 			pt = xref + Δgd .* i.I
 			if pt ∈ ngon
@@ -138,7 +216,7 @@ begin
 					   grid::Meshes.CartesianGrid{2,T},
 		     		   method::EdgeFunctions;
 					   verbose = false) where {N,T}
-		
+
 		Δgd = Meshes.spacing(grid)
 		X = Meshes.vertices(ngon)
 		dX = ntuple(i -> X[i] - X[i == 1 ? N : i-1], N)
@@ -177,16 +255,14 @@ let
 
 	N = (32, 32)
 
-	
 	gd = Meshes.CartesianGrid(N, Meshes.Point(0, 0), Meshes.Vec(10 ./ N))
 	data = Meshes.meshdata(gd, Dict(2 => (distance=Union{Missing, Float64}[missing for el in gd], )))
-	
 
 	for ind in rasterize(pg, gd, EdgeFunctions())
 		i = LinearIndices(size(gd))[ind]
 		data["distance"][i] = 0.5
 	end
-	
+
 	fig = Mke.Figure(resolution = (400, 400))
 	ax = Mke.Axis(fig[1,1])
 
@@ -203,9 +279,6 @@ let
 
 	fig
 end
-
-# ╔═╡ 17854bbc-543c-42bd-a126-943edda8c75a
-md"### Tests"
 
 # ╔═╡ 3772c9e9-2db1-4978-a011-de19799f4e98
 const test_cases = [ # grid = (dims, origin, spacing[, offset])
@@ -252,9 +325,6 @@ end
 	runtests(test_cases, (TraverseGrid, TraverseBoundingBox, EdgeFunctions))
 end;
 
-# ╔═╡ 0d7b073f-90a3-4588-b4d1-5cc0b14e2bc5
-md"### Benchmarks"
-
 # ╔═╡ 409498df-51ed-49e8-85a9-efcdee401255
 function runbenchmarks(method)
 	ngon = Meshes.Ngon([(1.2,1.7), (1.8,1.8), (1.3,2.1), (1.1,1.9)])
@@ -281,9 +351,6 @@ runbenchmarks(TraverseBoundingBox())
 runbenchmarks(EdgeFunctions())
   ╠═╡ =#
 
-# ╔═╡ 3c555464-59e2-4c98-bdfe-f64891f6b569
-md"### Allocations"
-
 # ╔═╡ bf425675-9ee5-43de-a67a-b9098a751187
 # ╠═╡ disabled = true
 #=╠═╡
@@ -301,29 +368,210 @@ let
 end
   ╠═╡ =#
 
-# ╔═╡ 342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
-md"## Rasterize 3D Polyhedron"
+# ╔═╡ 3878eb72-1e01-4cf9-a31e-72fb1cd22496
+begin
+	function planes(ph::Meshes.Polyhedron{Dim,T}) where {Dim,T}
+		Iterators.map(Meshes.facets(ph)) do facet
+			xs = Meshes.vertices(facet)
+			p::Meshes.Point{Dim,T} = xs[1]
+			u::Meshes.Vec{Dim,T} = xs[2] - p
+			v::Meshes.Vec{Dim,T} = xs[3] - p
+			Meshes.Plane(p, u, v)
+		end
+	end
 
-# ╔═╡ 73dfeea2-3faf-458c-ad41-7d592a581479
+	function planes(pr::Prism)
+		v1 = pr.base[2] - pr.base[1]
+		v2 = pr.base[3] - pr.base[2]
+		v3 = pr.base[1] - pr.base[3]
+		v4 = pr.side
+		vs = (v1, v2, v3, v4)
+		ntuple(5) do i
+			p = isodd(i) ? pr.base[1] : pr.base[2] + pr.side
+			u = vs[(1,2,3,1,1)[i]]
+			v = vs[(4,4,4,2,3)[i]]
+			Meshes.Plane(p, u, v)
+		end
+	end
+end
 
+# ╔═╡ 78627653-63f1-463b-9b25-6eac18916a67
+function edgefunctions(ph::Meshes.Polyhedron, grid)
 
-# ╔═╡ 1f405903-9e56-408c-aea6-1f1328bc58c9
+	# as the facets should have outward-pointing normals, the edge functions
+	# as defined here should be negative for points inside the polyhedron
 
+	spacing = Meshes.spacing(grid)
+	xref = minimum(grid) - 0.5 * spacing
 
-# ╔═╡ 365fd982-261a-4c11-85d3-0f54b6d4865a
+	pls = planes(ph)
+	ntuple(length(pls)) do i
+		pl = pls[i]
+		normal = Meshes.cross(pl.u, pl.v)
+		Eref = Meshes.dot(xref - pl.p, normal)
+		dE = normal .* spacing
+		Meshes.Vec(dE..., Eref)
+	end
+end
 
+# ╔═╡ 6969c27d-6609-4f30-94fd-5d1c9a4fdc91
+begin
+	# test points using edge functions (Pineda, 1988)
+	# → only works for convex polyhedra!
+	function rasterize3d(poly::Meshes.Polyhedron{3,T},
+						 grid::Meshes.CartesianGrid{3,T},
+						 method::EdgeFunctions) where {T}
+		E = edgefunctions(poly, grid)
+		tol = convert(T, method.tol)
+		inds = rasterize(Meshes.boundingbox(poly), grid)
+		Iterators.filter(inds) do ind
+			all(Ei[1]*ind[1] + Ei[2]*ind[2] + Ei[3] * ind[3] + Ei[4] < tol for Ei in E)
+		end
+	end
 
-# ╔═╡ 3d03fcd5-a804-452e-b409-8d7317df014f
+	function rasterize3d(poly, grid, ::Meshes.GrahamScan)
 
+		dx, dy, dz = Meshes.spacing(grid)
+		z0 = Meshes.coordinates(minimum(grid))[3] - 0.5 * dz
 
-# ╔═╡ 1b06df66-f0db-40c6-a8ad-79e855c883e0
+		dims2d = size(grid)[1:2]
+		origin2d = Meshes.Point(Meshes.coordinates(minimum(grid))[1:2])
+		spacing2d = Meshes.SVector(dx, dy)
+		grid2d = Meshes.CartesianGrid(dims2d, origin2d, spacing2d)
 
+		segs = Meshes.faces(poly, 1)
+		inds = rasterize(Meshes.boundingbox(poly), grid)
+
+		Iterators.map(inds.indices[3]) do iz
+
+			# find intersection points with z-plane
+			pl = Meshes.Plane((0.,0.,z0 + iz * dz), (1.,0.,0.), (0.,1.,0.))
+			pts = segs |>
+				sgs -> Iterators.map(x->Meshes.intersect(pl, x), sgs) |>
+				pts -> Iterators.filter(x->!isnothing(x), pts) |>
+				pts -> Iterators.map(x->Meshes.Point2(Meshes.coordinates(x)[1:2]...), pts) |>
+				collect
+
+			# skip layer if no intersections
+			isempty(pts) && return ()
+
+			# construct polygon
+			ng = Meshes.hull(Meshes.PointSet(pts), Meshes.GrahamScan()) |>
+				Meshes.vertices |> Meshes.Ngon
+
+			Iterators.map(rasterize(ng, grid2d, EdgeFunctions())) do ind
+				CartesianIndex(ind.I..., iz)
+			end
+		end |> Iterators.flatten
+	end
+end
+
+# ╔═╡ 2d56559f-ed8a-4775-93e3-ff6c5f6e54c5
+let
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	method = EdgeFunctions()
+	#@code_warntype planes(prism)
+	#@benchmark planes($prism)
+	#planes(prism) |> collect
+	#@code_warntype edgefunctions(prism, grid)
+	#@benchmark edgefunctions($prism, $grid)
+	#@code_warntype rasterize3d(prism, grid, method)
+	@benchmark maximum(rasterize3d($prism, $grid, $method))
+end
+
+# ╔═╡ 1dd29d36-dfd3-4bea-a29c-b190c5713575
+let
+    f = 2-1e-12
+    h = 2*f
+    #pr = Prism(Meshes.Point.([(0,0,f), (0,f,0), (f,0,0)]), (h,h,h))
+    #pr = Prism(Meshes.Point.([(0,0,-f), (0,f,0), (f,0,0)]), (h,h,h))
+    #pr = Prism(Meshes.Point.([(0,0,0), (0,f,0), (f,0,0)]), (0,0,h))
+	pr = Prism(Meshes.Point.([(2,1,0), (4,1,0), (3,1,1)]), (0,2,0))
+	#pr = Prism(Meshes.Point.([(2,1,2), (4,1,2), (3,1,1)]), (0,2,0))
+
+	gd = Meshes.CartesianGrid((0.,0.,0.), (5.,5.,5.), dims=(10,10,10))
+	#gd = Meshes.CartesianGrid((0,0,0), (4,4,4), dims=(4,4,4))
+	#gd = Meshes.CartesianGrid((-0.5,-0.5,-0.5), (4.5,4.5,4.5), dims=(5,5,5))
+
+	#method = Meshes.GrahamScan()
+	method = EdgeFunctions()
+
+	pts = map(rasterize3d(pr, gd, method)) do i
+		Meshes.centroid(gd[LinearIndices(size(gd))[i]])
+	end
+
+	fig = Mke.Figure(resolution = (400, 400))
+	ax = Mke.Axis3(fig[1,1])
+	MeshViz.viz!(Meshes.PointSet(Meshes.vertices(pr)), color=:black)
+	isempty(pts) || MeshViz.viz!(pts, color=:yellow)
+	MeshViz.viz!(pr, alpha=0.25, transparency=true)
+	fig
+end
+
+# ╔═╡ c49f0f3d-043c-4dc4-aab8-7fa7b5a23dda
+md"### Checks & Benchmarks"
+
+# ╔═╡ ad748fba-054c-4d74-b589-24dbc0d8afd1
+let
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,-0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	rg = rasterize3d(prism, grid, Meshes.GrahamScan()) |> collect
+	re = rasterize3d(prism, grid, EdgeFunctions()) |> collect
+	@test rg == re
+end
+
+# ╔═╡ 8ffe0ca3-07bd-46ff-b525-8890acf98b68
+function runbenchmarks3d(method)
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	@benchmark maximum(rasterize3d($prism, $grid, $method))
+end
 
 # ╔═╡ 3bd42cac-c944-44c3-a8d9-e4eb07d059d3
-
+# ╠═╡ disabled = true
+#=╠═╡
+runbenchmarks3d(Meshes.GrahamScan())
+  ╠═╡ =#
 
 # ╔═╡ a1588120-35c9-4719-8bca-757f56cc288a
+# ╠═╡ disabled = true
+#=╠═╡
+runbenchmarks3d(EdgeFunctions())
+  ╠═╡ =#
 
+# ╔═╡ ba3a5975-631f-44d3-9d7f-96c89927b7a2
+# ╠═╡ disabled = true
+#=╠═╡
+runbenchmarks3d(EdgeFunctions())
+  ╠═╡ =#
+
+# ╔═╡ 59335790-2400-4e6b-aff5-5f3837503033
+let
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	#method = TraverseBoundingBox()
+	method = EdgeFunctions()
+	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	Profile.clear()
+	Profile.@profile [maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1)) for i=1:100]
+	PProf.pprof(web=false)
+	#Profile.print()
+end
+
+# ╔═╡ 86244339-1362-48b0-8342-d4a6528138e3
+let
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	#method = TraverseBoundingBox()
+	method = EdgeFunctions()
+	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	Profile.Allocs.clear()
+	Profile.Allocs.start(sample_rate=1.0)
+	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	Profile.Allocs.stop()
+	PProf.Allocs.pprof(web=false)
+end
 
 # ╔═╡ ff1d3625-60e0-41dd-b889-0d2606378568
 md"""# Old Code"""
@@ -337,28 +585,28 @@ begin
 	# returns the integer values inside the polygon
 	# to find indices, convert the polygon points into a space of continuous indices
 	function scan_polygon(pts::Array{Tuple{Float64,Float64},1}, ε = 1e-6)
-	    
+
 	    # list of integer coordinates that are contained in the polygon
 	    coords = Tuple{Int,Int}[]
-	    
+
 	    # find y-extent of polygon
 	    sort!(pts, by=pt->(pt[2],pt[1])) # sort by y, then by x
-	    
+
 	    # line from imin to imax, in the form v0 + vl·t
 	    v0 = [pts[1]...] # vector to origin of the line
 	    vl = [pts[end]...] - v0 # vector along the line
 	    vl /= (n=LinearAlgebra.norm(vl); n>ε ? n : 1)
 	    dx(pt) = pt[1] - v0[1] - LinearAlgebra.dot([pt...]-v0, vl) * vl[1]
-	    
+
 	    # split points as below (-1), on (0) or above (1) the line connecting first & last point
 	    xdir = map(pt -> (dx_pt=dx(pt); abs(dx_pt)<ε ? 0 : sign(dx_pt)), pts)
 	    pts_lower = pts[xdir .<= 0]
 	    pts_upper = pts[xdir .>= 0]
-	    
+
 	    il, iu = 2, 2 # set indices to second node (end of first line)
-	    
+
 	    for y = ceil(Int, pts[1][2]-ε):floor(Int, pts[end][2]+ε)
-	        
+
 	        # update il & iu
 	        while (pts_lower[il][2] < y && il < length(pts_lower))
 	            il += 1
@@ -366,21 +614,21 @@ begin
 	        while (pts_upper[iu][2] < y && iu < length(pts_upper))
 	            iu += 1
 	        end
-	        
+
 	        # find extent of x-indices
-	        xmin = ((x1,y1) = pts_lower[il-1]; (x2,y2) = pts_lower[il]; 
+	        xmin = ((x1,y1) = pts_lower[il-1]; (x2,y2) = pts_lower[il];
 	            abs(y2-y1)<ε ? min(x1, x2) : x1 + (x2-x1) * (y-y1)/(y2-y1))
-	        xmax = ((x1,y1) = pts_upper[iu-1]; (x2,y2) = pts_upper[iu]; 
+	        xmax = ((x1,y1) = pts_upper[iu-1]; (x2,y2) = pts_upper[iu];
 	            abs(y2-y1)<ε ? max(x1, x2) : x1 + (x2-x1) * (y-y1)/(y2-y1))
-	        
+
 	        for x = ceil(Int, xmin-ε):floor(Int, xmax+ε)
 	            push!(coords, (x,y))
 	        end
 	    end
-	    
+
 	    coords
 	end
-	
+
 	scan_polygon(pts::Array{Tuple{T,T},1}) where T <: Real = scan_polygon([convert(Tuple{Float64,Float64}, pt) for pt=pts])
 
 end
@@ -425,10 +673,10 @@ function test_scan_polygon(pts)
     # draw pixel grid midpoints
     xvals = (xplt[1:end-1]+xplt[2:end])/2
     yvals = (yplt[1:end-1]+yplt[2:end])/2
-	
+
     #ax[:plot]([x for x=xvals, y=yvals][:], [y for x=xvals, y=yvals][:], ".w", ms=1)
     Mke.scatter!(ax, [x for x=xvals, y=yvals][:], [y for x=xvals, y=yvals][:], color=:white, markersize=3)
-	
+
     # draw polygon points
     #ax[:plot]([pt[1] for pt=pts], [pt[2] for pt=pts], ".k", ms=10)
     Mke.scatter!(ax, [pt[1] for pt=pts], [pt[2] for pt=pts], color=:black, markersize=10)
@@ -450,45 +698,45 @@ begin
 	    nodes::Array{Tuple{Float64,Float64,Float64},1},
 	    edges::Array{Tuple{Int,Int},1},
 	    ε = 1e-9)
-	
+
 	    coords = Tuple{Int, Int, Int}[]
-	    
+
 	    # find the order of nodes when they are sorted by z, then y, then x
 	    nids = sortperm(nodes, by = n -> (n[3], n[2], n[1]))
 	    nmin, nmax = nodes[nids[[1,end]]]
-	    
+
 	    # reorient the edges such that their first index is the lowest
 	    # (according to sort order of nodes)
 	    edges = [findfirst(isequal(e[1]), nids) > findfirst(isequal(e[2]), nids) ? (e[2], e[1]) : e for e=edges]
-	    
+
 	    # build list of edges starting at the lowest node
 	    current = filter(e -> e[1] == nids[1], edges)
-	    
+
 	    function distance_to_axis(p) # axis: a+tn
 	        a = [nmin...]
 	        n = [nmax...] - a
 	        n /= (nn=norm(n); nn<ε ? 1 : nn) # do not normalize null vector
 	        d = norm((a-p) - dot(a-p, n) * n)
 	    end
-	    
+
 	    function intersect(e, z)
 	        x1, y1, z1 = nodes[e[1]]
 	        x2, y2, z2 = nodes[e[2]]
-	
+
 	        # return point closer to axis if the points are basically on the same level
 	        if abs(z1-z2) < ε
 	            d1 = distance_to_axis([x1, y1, z1])
 	            d2 = distance_to_axis([x2, y2, z2])
 	            return (d1 > d2) ? (x1, y1) : (x2, y2)
 	        end
-	
+
 	        r = (z-z1) / (z2-z1)
 	        (x1 * (1-r) + x2 * r, y1 * (1-r) + y2 * r)
 	    end
-	    
+
 	    zmin = ceil(Int, nodes[nids[1]][3]-ε)
 	    zmax = floor(Int, nodes[nids[end]][3]+ε)
-	    
+
 	    # initialize with eager switching
 	    i = 2 # index of next node to be passed
 	    while (nodes[nids[i]][3]-ε < zmin && i < length(nids))
@@ -496,9 +744,9 @@ begin
 	                   filter(e -> e[1] == nids[i], edges)]
 	        i += 1
 	    end
-	    
+
 	    for z in zmin:zmax
-	        
+
 	        # if a node has been passed, remove edges stopping at i
 	        # and add edges starting at i (use lazy switching)
 	        while (nodes[nids[i]][3]+ε < z && i < length(nids))
@@ -506,24 +754,24 @@ begin
 	                       filter(e -> e[1] == nids[i], edges)]
 	            i += 1
 	        end
-	        
+
 	        # intersect edge with z-level to find points of polygon
 	        for (x,y) in scan_polygon([intersect(e, z) for e in current])
 	            push!(coords, (x, y, z))
 	        end
-	        
+
 	    end
-	    
+
 	    coords
 	end
-	
-	scan_polyhedron(nodes, edges) = 
+
+	scan_polyhedron(nodes, edges) =
 	    scan_polyhedron([convert(Tuple{Float64,Float64,Float64}, n) for n=nodes], edges)
 end
 
 # ╔═╡ d1d6e530-39fa-4600-815b-975095392a86
 function test_scan_polyhedron()
-    
+
     f = 2-1e-12
     h = 2*f
     #nodes = [(0,0,f), (0,f,0), (f,0,0),
@@ -539,15 +787,15 @@ function test_scan_polyhedron()
     elems = [(1,2), (2,3), (3,1), (4,5), (5,6), (6,4), (1,4), (2,5), (3,6)]
 	fig = Mke.Figure()
 	ax = Mke.Axis3(fig[1,1])
-    
+
     for e in elems
         n1 = nodes[e[1]]
         n2 = nodes[e[2]]
         Mke.lines!([n1[1], n2[1]], [n1[2], n2[2]], [n1[3], n2[3]], color=:black)
     end
-    
+
     coords = scan_polyhedron(nodes, elems)
-    Mke.scatter!([c[1] for c=coords], [c[2] for c=coords], [c[3] for c=coords], 
+    Mke.scatter!([c[1] for c=coords], [c[2] for c=coords], [c[3] for c=coords],
 		color=:black, markersize=10)
 
 	fig
@@ -569,14 +817,13 @@ end
 
 # ╔═╡ cf3f64fd-249f-44b2-9693-3cb8190f9d46
 function test_distance_function(; i3 = nothing)
-    
+
     nx, ny, nz = 300, 300, 20
     lx, ly, lz =  3,  3,  2
 
     #c = generate_cubes((lx, ly), (1,1), (1,1,1));
     c = generate_cube()
-    
-    
+
     # grid for distance function
     x = range(0,lx,nx+1)[1:end-1]
     y = range(0,ly,ny+1)[1:end-1]
@@ -584,12 +831,11 @@ function test_distance_function(; i3 = nothing)
     dx = x[2]-x[1]
     dy = y[2]-y[1]
     dz = z[2]-z[1]
-    
+
     # initialize to infinite distance
     dmax = 0.5
     d = Float64[dmax*2 for x=x, y=y, z=z];
-    
-    
+
     function set_coord(coord, val)
         if (1 <= coord[1] <= nx && 1 <= coord[2] <= ny && 1 <= coord[3] <= nz+1)
             if abs(d[coord...]) > abs(val)
@@ -597,47 +843,46 @@ function test_distance_function(; i3 = nothing)
             end
         end
     end
-    
-    
+
     for e in c.elems
-        
+
         #println(e)
         n1, n2, n3 = ([c.nodes[ni]...] for ni=e)
         normal = LinearAlgebra.cross(n2-n1, n3-n1)
-        
+
         if abs(normal[2]) < 1e-6 || n1[3] > 0.6 || n2[3] > 0.6 || n3[3] > 0.6
             #continue
         end
-        
+
         normal = normal / LinearAlgebra.norm(normal)
         #println("triangle: ", [n1, n2, n3])
         #println("normal: ", normal)
-        
+
         # add prism shape to distance field
         nd = normal * dmax
         n_prism = [n1-nd, n2-nd, n3-nd, n1+nd, n2+nd, n3+nd]
         e_prism = [(1,4), (2,5), (3,6), (1,2), (2,3), (3,1), (4,5), (5,6), (6,4)]
-        
+
         # transform nodes to index space
         index(pt) = (1 + pt[1]/dx, 1 + pt[2]/dy, 1 + pt[3]/dz)
         value(cd) = [(cd[1]-1)*dx, (cd[2]-1)*dy, (cd[3]-1)*dz]
         i_prism = map(index, n_prism)
-        
+
         #println("n_prism: ", n_prism)
         #println("i_prism: ", i_prism)
         #println("e_prism: ", e_prism)
-        
+
         coords = scan_polyhedron(i_prism, e_prism)
-        
+
         #println(" → found coords: ", coords)
-        
+
         # set coords to one
         for coord in coords
             #xyz = value(coord)
             set_coord(coord, LinearAlgebra.dot(value(coord) - n1, normal))
         end
     end
-    
+
     # plot slice
     xplt=range(x[1]-dx/2, x[end]+dx/2, nx+1)
     yplt=range(y[1]-dy/2, y[end]+dy/2, ny+1)
@@ -665,32 +910,32 @@ md"## Unused code"
 
 # ╔═╡ e6856840-acce-48bc-a0da-4c3c0d26161b
 function scan(pts)
-    
+
     ε = +1e-6
-    
+
     figure(figsize=(6,6))
     ax = gca()
     xlim(-0.25,10.25)
     ylim(-0.25,10.25)
-    
+
     #data = [(i%2==0 && j%2==0 ? 1 : 0) for i=0:20, j=0:20] # checkerboard pattern
     data = [0 for i=0:20, j=0:20]
     xplt = linspace(-0.25,10.25,22)
     yplt = linspace(-0.25,10.25,22)
-    
+
     get(array, i) = array[(n=length(array); i < 1 ? i+n : i>n ? i-n : i)]
-    
+
     x = (xplt[1:end-1]+xplt[2:end])/2
     y = (yplt[1:end-1]+yplt[2:end])/2
-    
+
     ymin, imin = findmin(pt[2] for pt=pts)
     ymax, imax = findmax(pt[2] for pt=pts)
     #ax[:plot]([pts[imin][1]], [pts[imin][2]], "*y")
     #ax[:plot]([pts[imax][1]], [pts[imax][2]], "*g")
-    
+
     wrap(i, n) = i<1 ? i+1 : i>n ? i-n : i
     wrapped_range(i1,i2,n) = i1 <= i2 ? collect(i1:i2) : [collect(i1:n); collect(1:i2)]
-    
+
     n = length(pts)
     if pts[wrap(imin-1,n)][1] < pts[wrap(imin+1,n)][1]
         println("case1")
@@ -701,52 +946,48 @@ function scan(pts)
         lower = wrapped_range(imin,imax,n)
         upper = reverse(wrapped_range(imax,imin,n))
     end
-    
+
     il = 2
     iu = 2
     println("imin: ", imin, ", ", "imax: ", imax)
     println("lower:", lower)
     println("upper:", upper)
-    
+
     #ax[:plot]([get(pts,i)[1] for i=neighbors], [get(pts,i)[2] for i=neighbors], "--g")
-    
-    
-    
+
     for iy = find(ymin - ε .< y .< ymax + ε)
-        
+
         yi = y[iy]
-        
+
         while (pts[lower[il]][2] < yi && il < length(lower))
             il += 1
         end
-        
+
         while (pts[upper[iu]][2] < yi && il < length(upper))
             iu += 1
         end
-        
-        
-        
+
         xl1, yl1 = pts[lower[il-1]]
         xl2, yl2 = pts[lower[il]]
         xu1, yu1 = pts[upper[iu-1]]
         xu2, yu2 = pts[upper[iu]]
-        
+
         xmin = xl1 + (yi-yl1)/(yl2-yl1)*(xl2-xl1)
         xmax = xu1 + (yi-yu1)/(yu2-yu1)*(xu2-xu1)
         println("y = ", yi, ", x ∈ ", [xmin, xmax])
-        
+
         for ix = find(xmin - ε .< x .< xmax + ε)
             data[ix,iy] = 1
         end
-        
+
     end
-    
+
     ax[:pcolormesh](xplt, yplt, data')
-    
+
     ax[:plot]([x for x=x, y=y][:], [y for x=x, y=y][:], ".y")
     ax[:plot]([pt[1] for pt=[pts;pts[1]]], [pt[2] for pt=[pts;pts[1]]], "-r")
     ax[:plot]([pt[1] for pt=pts], [pt[2] for pt=pts], ".k")
-    
+
 end
 
 scan(reverse([(1,8), (5+2*rand(),7), (9.5,3), (4,2), (-2.1,3)]))
@@ -756,10 +997,10 @@ scan(reverse([(1,8), (5+2*rand(),7), (9.5,3), (4,2), (-2.1,3)]))
 # xind/yind is a function that takes an x/y-value and returns the corresponding index on a continuous scale
 # xval/yval give the x/y value of an index
 function scan_polygon2(pts, xind::Function, yind::Function, xval::Function, yval::Function, ε = 1e-6)
-    
+
     # list of indices that are contained in the polygon
     indices = Tuple{Int,Int}[]
-    
+
     # helper function for array of points
     n = length(pts)
     wrap(i) = i<1 ? i+n : i>n ? i-n : i
@@ -771,19 +1012,19 @@ function scan_polygon2(pts, xind::Function, yind::Function, xval::Function, yval
         x = p1[1] + (p2[1]-p1[1]) * (y-p1[2])/(p2[2]-p1[2])
         (min(xrange[1], x), max(xrange[2], x))
     end
-    
+
     # find y-extent of polygon
     ymin, imin = findmin(pt[2] for pt=pts)
     ymax, imax = findmax(pt[2] for pt=pts)
-    
+
     # indices for going left & right along the polygon
     il = wrap(imin-1)
     ir = wrap(imin+1)
-    
+
     for iy = ceil(Int, yind(ymin-ε)):floor(Int, yind(ymax+ε))
-        
+
         y = yval(iy)
-        
+
         # advance currently active line segments, not going past last point
         # TODO: add epsilon for switch at correct moment
         while (pts[il][2] < y && il != imax)
@@ -794,20 +1035,20 @@ function scan_polygon2(pts, xind::Function, yind::Function, xval::Function, yval
             ir = wrap(ir+1)
             println("advancing ir to $(ir) at y=$(y)")
         end
-        
+
         # find x-values for current y-value on line segments
         xrange = [Inf, -Inf]
         xrange = interp_x(pts[il], pts[wrap(il+1)], y, xrange)
         xrange = interp_x(pts[wrap(ir-1)], pts[ir], y, xrange)
-        
+
         println("y = ", y, ", x ∈ ", xrange)
-        
+
         for ix = ceil(Int, xind(xrange[1]-ε)):floor(Int, xind(xrange[2]+ε))
             push!(indices, (ix,iy))
         end
-        
+
     end
-    
+
     return indices
 end
 
@@ -850,12 +1091,12 @@ pygui(false)
 # ╔═╡ cf1669a2-1096-4015-814e-7b423b8b051e
 function intersect_z(p1, p2, z)
     ε = +1e-6
-    
+
     # return first value if the points are basically on the same level
     if abs(p1[3]-p2[3]) < ε
         return (p1[1], p1[2])
     end
-    
+
     r = (z-p1[3]) / (p2[3]-p1[3])
     (p1[1] * (1-r) + p2[1] * r,
      p1[2] * (1-r) + p2[2] * r)
@@ -865,22 +1106,22 @@ function intersect_prism(n1, n2, n3, v, xvals, yvals, zvals)
     assert(n1[3] <= n2[3] <= n3[3])
     assert(v[3] >= 0)
     ε = +1e-6
-    
+
     N1 = [n1[i]+v[i] for i=1:3]
     N2 = [n2[i]+v[i] for i=1:3]
     N3 = [n3[i]+v[i] for i=1:3]
-    
+
     println("n1,n2,n3=", n1, n2, n3)
     println("N1,N2,N3=", N1, N2, N3)
     println("v=", v)
-    
+
     layer_edges = [(n1,n2), (n1,n3), (n1,N1)]
-    
+
     fig = figure()
     ax = gca(projection="3d")
     xlabel("x")
     ylabel("y")
-    
+
     # prepare functions for switching between values & indices for x & y
     x0, y0 = xvals[1], yvals[1]
     dx, dy = xvals[2]-xvals[1], yvals[2]-yvals[1]
@@ -888,14 +1129,13 @@ function intersect_prism(n1, n2, n3, v, xvals, yvals, zvals)
     yval(j) = y0 + (j-1) * dy
     xind(x) = 1 + (x-x0) / dx
     yind(y) = 1 + (y-y0) / dy
-    
+
     # plot dot grid
     #ax[:plot]([x for x=xvals, y=yvals, z=zvals][:], [y for x=xvals, y=yvals, z=zvals][:],
     #    [z for x=xvals, y=yvals, z=zvals][:], ".k", ms=1)
-    
-    
+
     for z in zvals[n1[3] - ε .< zvals .< N3[3] + ε]
-        
+
         while true
             replace = [e[2][3] < z + 2ε for e = layer_edges]
             println(replace)
@@ -925,13 +1165,11 @@ function intersect_prism(n1, n2, n3, v, xvals, yvals, zvals)
             end
             break
         end
-            
-        
+
         pts = [intersect_z(e..., z) for e in layer_edges]
         i_pgn = scan_polygon(pts, xind, yind, xval, yval, ε)
         println("scan polygon for layer z=",z, " with polygon ", pts)
-        
-        
+
         # plot polygon & points
         ax[:plot]([pt[1] for pt=[pts;pts[1]]], [pt[2] for pt=[pts;pts[1]]], [z for pt=[pts;pts[1]]], "-r")
         ax[:plot]([xval(i[1]) for i=i_pgn], [yval(i[2]) for i=i_pgn], [z for i=i_pgn], ".g", ms=4)
@@ -976,7 +1214,7 @@ intersect_prism(v01, v01+v12, v01+v13, v1n, xv, yv, zv)
 #   is the same as the lowest on the second one
 # - zero points: polygon is a triangle, all three vectors from lowest point intersect with plane
 # - one point: could be from triangle or from following the normal
-#   - triangle: 
+#   - triangle:
 
 # ╔═╡ fd662a4f-768e-4f24-b4d4-3b1cf0ed3866
 z0, dz = z[1], z[2]-z[1]
@@ -989,7 +1227,6 @@ function add_polygon(n1, n2, n3, normal, iz)
     v1 = [n2...] - [n1...] # vector (n1->n2)
     v2 = [n3...] - [n2...] # vector n2 -> n3
     v3 = normal # only one side for now
-    
 end
 
 for e in c.elems
@@ -1007,7 +1244,7 @@ for e in c.elems
 end
 
 # ╔═╡ Cell order:
-# ╟─9929f2be-277a-11ed-375a-f18a1b52c0ca
+# ╠═9929f2be-277a-11ed-375a-f18a1b52c0ca
 # ╟─87aca29f-29df-44ba-9630-cc97e927a339
 # ╟─3671d217-c327-431f-9bfd-0f3e7fd4a01a
 # ╟─fc1826d8-f6ad-443f-bf65-2d5def8974a7
@@ -1015,8 +1252,8 @@ end
 # ╠═f33325a0-ca9e-4366-bc37-91dc414cad25
 # ╠═34b3f98c-1053-4aa7-ae0f-4aff49998c82
 # ╟─82d773d2-a328-41ca-b5c6-1836a393d6da
-# ╟─07d89b37-ffc9-49c1-9f7c-59e26f256fcd
-# ╟─a45d21c3-ea3b-4d11-8a4a-be519f1d7719
+# ╠═07d89b37-ffc9-49c1-9f7c-59e26f256fcd
+# ╠═a45d21c3-ea3b-4d11-8a4a-be519f1d7719
 # ╟─17854bbc-543c-42bd-a126-943edda8c75a
 # ╟─2d4b6ea3-decb-4f6a-939d-1eafe956828e
 # ╟─3772c9e9-2db1-4978-a011-de19799f4e98
@@ -1030,12 +1267,20 @@ end
 # ╟─bf425675-9ee5-43de-a67a-b9098a751187
 # ╟─342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
 # ╠═73dfeea2-3faf-458c-ad41-7d592a581479
-# ╠═1f405903-9e56-408c-aea6-1f1328bc58c9
-# ╠═365fd982-261a-4c11-85d3-0f54b6d4865a
-# ╠═3d03fcd5-a804-452e-b409-8d7317df014f
-# ╠═1b06df66-f0db-40c6-a8ad-79e855c883e0
+# ╠═c3ce016a-b6bb-4bf6-aa48-4f5da7818c77
+# ╠═3878eb72-1e01-4cf9-a31e-72fb1cd22496
+# ╠═2d56559f-ed8a-4775-93e3-ff6c5f6e54c5
+# ╠═78627653-63f1-463b-9b25-6eac18916a67
+# ╠═6969c27d-6609-4f30-94fd-5d1c9a4fdc91
+# ╟─1dd29d36-dfd3-4bea-a29c-b190c5713575
+# ╟─c49f0f3d-043c-4dc4-aab8-7fa7b5a23dda
+# ╟─ad748fba-054c-4d74-b589-24dbc0d8afd1
+# ╟─8ffe0ca3-07bd-46ff-b525-8890acf98b68
 # ╠═3bd42cac-c944-44c3-a8d9-e4eb07d059d3
 # ╠═a1588120-35c9-4719-8bca-757f56cc288a
+# ╠═ba3a5975-631f-44d3-9d7f-96c89927b7a2
+# ╠═59335790-2400-4e6b-aff5-5f3837503033
+# ╠═86244339-1362-48b0-8342-d4a6528138e3
 # ╟─ff1d3625-60e0-41dd-b889-0d2606378568
 # ╟─a07eeeed-1d9d-4574-bad3-fabc4f0b0af9
 # ╟─d4065db9-6b48-4c1e-ae33-ed793fc91c28
@@ -1044,7 +1289,7 @@ end
 # ╠═f415eab0-b090-495c-a79c-64a8ad4f3232
 # ╟─45c84785-e659-4454-9011-4b3281107498
 # ╠═277029cf-135e-465e-9401-f54734caf16e
-# ╟─973a989f-8090-4261-af3b-929f4d418633
+# ╠═973a989f-8090-4261-af3b-929f4d418633
 # ╠═d1d6e530-39fa-4600-815b-975095392a86
 # ╟─7d1ca20d-5e04-40ff-a398-b4daba6863ba
 # ╠═541d710e-8c4d-49fb-be19-7c0d3e9a4c14
