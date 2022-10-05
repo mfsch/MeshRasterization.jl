@@ -87,17 +87,19 @@ end
 # ╔═╡ c3ce016a-b6bb-4bf6-aa48-4f5da7818c77
 begin
 	connections(p::Prism, rank) = if rank == 0
-		Meshes.Vec((1,), (2,), (3,), (4,), (5,), (6,))
+		((1,), (2,), (3,), (4,), (5,), (6,))
 	elseif rank == 1
-		Meshes.Vec((1,2), (2,3), (3,1), (1,4), (2,5), (3,6), (4,5), (5,6), (6,4))
+		((1,2), (2,3), (3,1), (1,4), (2,5), (3,6), (4,5), (5,6), (6,4))
 	elseif rank == 2
-		Meshes.Vec((3,2,1),(5,4,1,2),(3,6,5,2),(1,4,6,3),(5,6,4))
+		((3,2,1),(5,4,1,2),(3,6,5,2),(1,4,6,3),(5,6,4))
 	elseif rank == 3
-		Meshes.Vec((1, 2, 3, 4, 5, 6))
+		((1, 2, 3, 4, 5, 6))
 	else
 		error("Invalid rank '$rank' for prism")
 	end
-	Meshes.boundary(p::Prism) = Meshes.SimpleMesh(Meshes.vertices(p), Meshes.connect.(connections(p, 2)))
+
+	# NOTE: creating a boundary allocates a vector for the connections
+	Meshes.boundary(p::Prism) = Meshes.SimpleMesh(Meshes.vertices(p), collect(Meshes.connect.(connections(p, 2))))
 
 	Meshes.nvertices(p::Prism) = 6
 	Meshes.vertices(p::Prism) = Meshes.Vec(p.base[1], p.base[2], p.base[3],
@@ -255,7 +257,7 @@ let
 
 	N = (32, 32)
 
-	gd = Meshes.CartesianGrid(N, Meshes.Point(0, 0), Meshes.Vec(10 ./ N))
+	gd = Meshes.CartesianGrid(N, Meshes.Point(0, 0), (10 ./ N))
 	data = Meshes.meshdata(gd, Dict(2 => (distance=Union{Missing, Float64}[missing for el in gd], )))
 
 	for ind in rasterize(pg, gd, EdgeFunctions())
