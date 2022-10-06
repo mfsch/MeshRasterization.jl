@@ -25,30 +25,16 @@ md"# Generate SDF from STL files"
 # ╔═╡ fc1826d8-f6ad-443f-bf65-2d5def8974a7
 md"## Load STL from file"
 
-# ╔═╡ c4697b84-9cbd-4178-9aaf-72527bddde67
-function loadmesh(path) # from MeshBridge.jl
+# ╔═╡ a96a6610-2199-414b-a97b-2f3c4a8d33d2
+function loadmesh(path; flip = false)
 	mesh = FileIO.load(path)
-
-	vertexToIdx = Dict()
-    for i in 1:length(mesh.position)
-        vertex = mesh.position[i]
-        if haskey(vertexToIdx, vertex)
-            continue
-        end
-        vertexToIdx[vertex] = i
-    end
-    faces = []
-    for triangle in mesh
-        i1 = vertexToIdx[triangle[1]]
-        i2 = vertexToIdx[triangle[2]]
-        i3 = vertexToIdx[triangle[3]]
-        push!(faces, (i1, i2, i3))
-    end
-    topology = Meshes.FullTopology(Meshes.connect.(faces))
-    result = Meshes.SimpleMesh(
-        [Meshes.Point([x[1], x[2], x[3]]) for x in mesh.position], topology
-    )
-    return result
+	points = [Tuple(p) for p in Set(mesh.position)]
+	indices = Dict(p => i for (i, p) in enumerate(points))
+	connectivities = map(mesh) do el
+		(i,j,k) = (indices[Tuple(p)] for p in el)
+		Meshes.connect(flip ? (i,k,j) : (i,j,k))
+	end
+    Meshes.SimpleMesh(Meshes.Point3.(points), connectivities)
 end
 
 # ╔═╡ f33325a0-ca9e-4366-bc37-91dc414cad25
@@ -56,20 +42,21 @@ let mesh = loadmesh("single-cube.stl")
 	MeshViz.viz(mesh, showfacets=true, color=1:Meshes.nelements(mesh))
 end
 
-# ╔═╡ 82d773d2-a328-41ca-b5c6-1836a393d6da
-md"## Rasterize 2D Polygons"
+# ╔═╡ 4ca47d96-e749-4b06-9b1e-8fa2222a0936
+md"## Rasterization Algorithms"
 
-# ╔═╡ 17854bbc-543c-42bd-a126-943edda8c75a
-md"### Tests"
+# ╔═╡ 908217b7-39f8-42bd-870b-92a2e872b7a7
+begin
+	abstract type Rasterization end
+	struct BoundingBox <: Rasterization end
+	struct EdgeFunctions{T} <: Rasterization
+		tol::T
+		EdgeFunctions(tol = 1e-9) = new{typeof(tol)}(tol)
+	end
+end
 
-# ╔═╡ 0d7b073f-90a3-4588-b4d1-5cc0b14e2bc5
-md"### Benchmarks"
-
-# ╔═╡ 3c555464-59e2-4c98-bdfe-f64891f6b569
-md"### Allocations"
-
-# ╔═╡ 342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
-md"## Rasterize 3D Prisms"
+# ╔═╡ 5a1e55bb-7a96-46c4-85d0-cf40606860bf
+md"### Extension of Polyhedra"
 
 # ╔═╡ 73dfeea2-3faf-458c-ad41-7d592a581479
 struct Prism{Dim,T,V<:AbstractVector{Meshes.Point{Dim,T}}} <: Meshes.Polyhedron{Dim,T}
@@ -146,37 +133,64 @@ let dims = (3, 3, 3), origin = (0.25, 0.25, 0.25), spacing = (0.5, 0.5, 0.5)
 	MeshViz.viz(gd, size=10)
 end
 
-# ╔═╡ a45d21c3-ea3b-4d11-8a4a-be519f1d7719
+# ╔═╡ 8b9a30c3-f4ab-4367-b2a0-a398da18cd1b
 begin
-	abstract type Rasterization end
-	struct TraverseGrid <: Rasterization end
-	struct TraverseBoundingBox <: Rasterization end
-	struct EdgeFunctions{T} <: Rasterization
-		tol::T
-		EdgeFunctions(tol = 1e-9) = new{typeof(tol)}(tol)
+
+	struct Hyperplane{Dim,T} <: Meshes.Primitive{Dim,T}
+		p::Meshes.Point{Dim,T}
+		n::Meshes.Vec{Dim,T}
 	end
 
-	# test if point in polygon for all points in grid
-	function rasterize(ngon::Meshes.Ngon{N,2,T},
-					   grid::Meshes.CartesianGrid{2,T},
-					   ::TraverseGrid;
-					   verbose = false) where {N,T}
-		verbose && println("Rasterize by traversing $(join(size(grid), '×')) grid:")
+	"""
+		hyperplanes(polytope)
 
-		lininds = LinearIndices(size(grid))
-		Iterators.filter(CartesianIndices(size(grid))) do i
-			pt = Meshes.centroid(grid[lininds[i]])
-			if pt ∈ ngon
-				verbose && println(" ☒ $(i.I): $pt")
-				true
-			else
-				verbose && println(" ☐ $(i.I): $pt")
-				false
-			end
+	Return the hyperplanes in which the boundaries of a polytope live, oriented such that the plane normals point out of the polytope.
+	"""
+	function hyperplanes(pt::Meshes.Polytope{Dim,Dim,T}) where {Dim,T}
+		error("Not implemented")
+	end
+
+	function hyperplanes(pg::Meshes.Ngon{N,2,T}) where {N,T}
+		v = Meshes.vertices(pg)
+		ntuple(N) do i
+			p = v[i]
+			dp = p - (i == 1 ? v[end] : v[i-1])
+			n = Meshes.Vec(dp[2], -dp[1])
+			Hyperplane(p, n)
 		end
 	end
 
-	function rasterize(box::Meshes.Box{N,T}, grid::Meshes.CartesianGrid{N,T}) where {N,T}
+	function hyperplanes(ph::Meshes.Polyhedron{3,T}) where {T}
+		# TODO: this only works correctly for some polyhedra
+		Iterators.map(Meshes.facets(ph)) do facet
+			xs = Meshes.vertices(facet)
+			p::Meshes.Point{3,T} = xs[1]
+			dp1::Meshes.Vec{3,T} = xs[2] - p
+			dp2::Meshes.Vec{3,T} = xs[3] - p
+			Hyperplane(p, Meshes.cross(dp1, dp2))
+		end
+	end
+
+	function hyperplanes(pr::Prism{3,T}) where {T}
+		v1 = pr.base[2] - pr.base[1]
+		v2 = pr.base[3] - pr.base[2]
+		v3 = pr.base[1] - pr.base[3]
+		v4 = pr.side
+		vs = (v1, v2, v3, v4)
+		ntuple(5) do i
+			p = isodd(i) ? pr.base[1] : pr.base[2] + pr.side
+			dp1 = vs[(1,2,3,1,1)[i]]
+			dp2 = vs[(4,4,4,2,3)[i]]
+			Hyperplane(p, Meshes.cross(dp1, dp2))
+		end
+	end
+end
+
+# ╔═╡ a45d21c3-ea3b-4d11-8a4a-be519f1d7719
+begin
+
+	function rasterize(box::Meshes.Box{Dim,T},
+					   grid::Meshes.CartesianGrid{Dim,T}) where {Dim,T}
 		dx = Meshes.spacing(grid)
 		imin = (minimum(box) - minimum(grid)) ./ dx .+ 1 |>
 			i -> floor.(Int, i) |>
@@ -184,67 +198,112 @@ begin
 		imax = (maximum(box) - minimum(grid)) ./ dx |>
 			i -> ceil.(Int, i) |>
 			i -> min.(i, size(grid))
-		inds = ntuple(i -> imin[i]:imax[i], N)
+		inds = ntuple(i -> imin[i]:imax[i], Dim)
 		CartesianIndices(inds)
 	end
 
-	# test if point in polygon for all points in bounding box
-	function rasterize(ngon::Meshes.Ngon{N,2,T},
-					   grid::Meshes.CartesianGrid{2,T},
-		     		   ::TraverseBoundingBox;
-					   verbose = false) where {N,T}
+	rasterize(geom, grid) = rasterize(geom, grid, BoundingBox())
 
-		Δgd = Meshes.spacing(grid)
+	# test if point in polygon for all points in bounding box
+	function rasterize(geom::Meshes.Geometry{Dim,T},
+					   grid::Meshes.CartesianGrid{Dim,T},
+		               ::BoundingBox) where {Dim,T}
+
+		Δgd = Meshes.spacing(grid) |> Meshes.Vec
 		xref = minimum(grid) - 0.5 * Δgd
 
-		inds = rasterize(Meshes.boundingbox(ngon), grid)
-		verbose && println("Rasterize by traversing $(join(size(inds), '×')) bounding box:")
-
+		inds = rasterize(Meshes.boundingbox(geom), grid)
 		Iterators.filter(inds) do i
 			pt = xref + Δgd .* i.I
-			if pt ∈ ngon
-				verbose && println(" ☒ $(i.I): $pt")
-				true
-			else
-				verbose && println(" ☐ $(i.I): $pt")
-				false
-			end
+			pt ∈ geom
 		end
 	end
 
-	# test points using edge functions (Pineda, 1988)
-	# → only works for convex polygons!
-	function rasterize(ngon::Meshes.Ngon{N,2,T},
-					   grid::Meshes.CartesianGrid{2,T},
-		     		   method::EdgeFunctions;
-					   verbose = false) where {N,T}
-
-		Δgd = Meshes.spacing(grid)
-		X = Meshes.vertices(ngon)
-		dX = ntuple(i -> X[i] - X[i == 1 ? N : i-1], N)
-
-		# Ei for reference position: centroid of index (0,0)
-		xref = minimum(grid) - 0.5 * Δgd
-		Eref = ntuple(i -> Meshes.cross(xref-X[i], dX[i]), N)
-
-		# change of Ei for moving one point in x-direction
-		dEx = ntuple(i -> dX[i][2] * Δgd[1], N)
-
-		# change of Ei for moving one point in y-direction
-		dEy = ntuple(i -> - dX[i][1] * Δgd[2], N)
-
-		# check edge functions for all indices in bounding box
-		inds = rasterize(Meshes.boundingbox(ngon), grid)
-		check_edgefunctions(Eref, dEx, dEy, inds; tol = convert(T, method.tol))
-	end
-
-	function check_edgefunctions(Eref::NTuple{N,T}, dEx::NTuple{N,T}, dEy::NTuple{N,T}, inds::CartesianIndices{2}; tol::T = eps(T)) where {N,T}
+	function rasterize(polytope::Meshes.Polytope{Dim,Dim,T},
+					   grid::Meshes.CartesianGrid{Dim,T},
+					   method::EdgeFunctions) where {Dim,T}
+		E = edgefunctions(polytope, grid)
+		tol = convert(T, method.tol)
+		inds = rasterize(Meshes.boundingbox(polytope), grid)
 		Iterators.filter(inds) do ind
-			all(Eref[i] + ind[1] * dEx[i] + ind[2] * dEy[i] < tol for i in 1:N)
+			all(apply_edgefunction(Ei, ind) < tol for Ei in E)
 		end
 	end
+
+	function edgefunctions(polytope::Meshes.Polytope{Dim,Dim,T},
+				grid::Meshes.CartesianGrid{Dim,T},
+				pos = T(0.5)) where {Dim,T}
+		dx = Meshes.spacing(grid) |> Meshes.Vec
+		xref = minimum(grid) + (pos .- 1) .* dx
+		map(hyperplanes(polytope)) do hp
+			# as the facets should have outward-pointing normals, the edge functions
+			# as defined here should be negative for points inside the polyhedron
+			dE = hp.n .* dx
+			Eref = Meshes.dot(xref - hp.p, hp.n)
+			Meshes.Vec(dE..., Eref)
+		end
+	end
+
+	# explicit multiplication appears to run faster than dot product
+	@inline apply_edgefunction(Ei::Meshes.Vec{3}, ind::CartesianIndex{2}) =
+		Ei[1] * ind[1] + Ei[2] * ind[2] + Ei[3]
+	@inline apply_edgefunction(Ei::Meshes.Vec{4}, ind::CartesianIndex{3}) =
+		Ei[1] * ind[1] + Ei[2] * ind[2] + Ei[3] * ind[3] + Ei[4]
 
 	rasterize
+end
+
+# ╔═╡ 6969c27d-6609-4f30-94fd-5d1c9a4fdc91
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	function rasterize3d(poly, grid, ::Meshes.GrahamScan)
+
+		dx, dy, dz = Meshes.spacing(grid)
+		z0 = Meshes.coordinates(minimum(grid))[3] - 0.5 * dz
+
+		dims2d = size(grid)[1:2]
+		origin2d = Meshes.Point(Meshes.coordinates(minimum(grid))[1:2])
+		spacing2d = Meshes.SVector(dx, dy)
+		grid2d = Meshes.CartesianGrid(dims2d, origin2d, spacing2d)
+
+		segs = Meshes.faces(poly, 1)
+		inds = rasterize(Meshes.boundingbox(poly), grid)
+
+		Iterators.map(inds.indices[3]) do iz
+
+			# find intersection points with z-plane
+			pl = Meshes.Plane((0.,0.,z0 + iz * dz), (1.,0.,0.), (0.,1.,0.))
+			pts = segs |>
+				sgs -> Iterators.map(x->Meshes.intersect(pl, x), sgs) |>
+				pts -> Iterators.filter(x->!isnothing(x), pts) |>
+				pts -> Iterators.map(x->Meshes.Point2(Meshes.coordinates(x)[1:2]...), pts) |>
+				collect
+
+			# skip layer if no intersections
+			isempty(pts) && return ()
+
+			# construct polygon
+			ng = Meshes.hull(Meshes.PointSet(pts), Meshes.GrahamScan()) |>
+				Meshes.vertices |> Meshes.Ngon
+
+			Iterators.map(rasterize(ng, grid2d, EdgeFunctions())) do ind
+				CartesianIndex(ind.I..., iz)
+			end
+		end |> Iterators.flatten
+	end
+end
+  ╠═╡ =#
+
+# ╔═╡ 82d773d2-a328-41ca-b5c6-1836a393d6da
+md"## Rasterize 2D Polygons"
+
+# ╔═╡ 7999f361-6a5b-4712-b7cb-3904fbecd108
+let
+	N = (2, 3)
+	gd = Meshes.CartesianGrid(N, Meshes.Point(0, 0), (10 ./ N))
+	dx = Meshes.spacing(gd)
+	minimum(gd) + Meshes.Vec(dx)
 end
 
 # ╔═╡ 07d89b37-ffc9-49c1-9f7c-59e26f256fcd
@@ -282,6 +341,9 @@ let
 	fig
 end
 
+# ╔═╡ 17854bbc-543c-42bd-a126-943edda8c75a
+md"### Tests"
+
 # ╔═╡ 3772c9e9-2db1-4978-a011-de19799f4e98
 const test_cases = [ # grid = (dims, origin, spacing[, offset])
 	(label = "unit square",
@@ -300,7 +362,7 @@ const test_cases = [ # grid = (dims, origin, spacing[, offset])
 	 grid = ((3,3), (0,0), (1/3,1/3)),
 	 points = ((1,0), (1,1), (0,1)),
 	 result = ((3,1), (2,2), (3,2), (1,3), (2,3), (3,3)),
-	 broken = (TraverseGrid, )), # TraverseBoundingBox may or may not pass
+	 broken = ()), # TraverseBoundingBox may or may not pass
 	(label = "small triangle",
 	 grid = ((3,4), (0,0), (1,1)),
 	 points = ((1.25,2.25), (1.75,2.25), (1.5,2.75)),
@@ -316,7 +378,7 @@ function runtests(cases, methods)
 				convert.(Float64, case.grid[2]),
 				convert.(Float64, case.grid[3]), case.grid[4:end]...)
 			broken = method in get(case, :broken, ())
-			@test [x.I for x in rasterize(ng, gd, method(), verbose=false)] ==
+			@test [x.I for x in rasterize(ng, gd, method())] ==
 				collect(case.result) broken=broken
 		end
 	end
@@ -324,38 +386,35 @@ end
 
 # ╔═╡ 2d4b6ea3-decb-4f6a-939d-1eafe956828e
 @testset "Rasterization" begin
-	runtests(test_cases, (TraverseGrid, TraverseBoundingBox, EdgeFunctions))
+	runtests(test_cases, (BoundingBox, EdgeFunctions))
 end;
 
+# ╔═╡ 0d7b073f-90a3-4588-b4d1-5cc0b14e2bc5
+md"### Benchmarks"
+
 # ╔═╡ 409498df-51ed-49e8-85a9-efcdee401255
-function runbenchmarks(method)
+function runbenchmarks2d(method)
 	ngon = Meshes.Ngon([(1.2,1.7), (1.8,1.8), (1.3,2.1), (1.1,1.9)])
 	grid = Meshes.CartesianGrid((256,256), (0.,0.), (4π/256, 2π/256))
 	@benchmark maximum(rasterize($ngon, $grid, $method))
-	#rasterize(ngon, grid, method)
 end
-
-# ╔═╡ ef3d6f6e-327f-45b8-92c6-423dd52bac49
-# ╠═╡ disabled = true
-#=╠═╡
-runbenchmarks(TraverseGrid())
-  ╠═╡ =#
 
 # ╔═╡ e0415fec-1d32-458d-ae55-87251486cbcb
 # ╠═╡ disabled = true
 #=╠═╡
-runbenchmarks(TraverseBoundingBox())
+runbenchmarks2d(BoundingBox())
   ╠═╡ =#
 
 # ╔═╡ 01843255-f9a3-49a7-a989-b15b2e6932de
 # ╠═╡ disabled = true
 #=╠═╡
-runbenchmarks(EdgeFunctions())
+runbenchmarks2d(EdgeFunctions())
   ╠═╡ =#
 
+# ╔═╡ 3c555464-59e2-4c98-bdfe-f64891f6b569
+md"### Allocations"
+
 # ╔═╡ bf425675-9ee5-43de-a67a-b9098a751187
-# ╠═╡ disabled = true
-#=╠═╡
 let
 	ngon = Meshes.Ngon([(1.2,1.7), (1.8,1.8), (1.3,2.1), (1.1,1.9)])
 	grid = Meshes.CartesianGrid((256,256), (0.,0.), (4π/256, 2π/256))
@@ -368,119 +427,28 @@ let
 	Profile.Allocs.stop()
 	PProf.Allocs.pprof(web=false)
 end
-  ╠═╡ =#
 
-# ╔═╡ 3878eb72-1e01-4cf9-a31e-72fb1cd22496
-begin
-	function planes(ph::Meshes.Polyhedron{Dim,T}) where {Dim,T}
-		Iterators.map(Meshes.facets(ph)) do facet
-			xs = Meshes.vertices(facet)
-			p::Meshes.Point{Dim,T} = xs[1]
-			u::Meshes.Vec{Dim,T} = xs[2] - p
-			v::Meshes.Vec{Dim,T} = xs[3] - p
-			Meshes.Plane(p, u, v)
-		end
-	end
-
-	function planes(pr::Prism)
-		v1 = pr.base[2] - pr.base[1]
-		v2 = pr.base[3] - pr.base[2]
-		v3 = pr.base[1] - pr.base[3]
-		v4 = pr.side
-		vs = (v1, v2, v3, v4)
-		ntuple(5) do i
-			p = isodd(i) ? pr.base[1] : pr.base[2] + pr.side
-			u = vs[(1,2,3,1,1)[i]]
-			v = vs[(4,4,4,2,3)[i]]
-			Meshes.Plane(p, u, v)
-		end
-	end
-end
-
-# ╔═╡ 78627653-63f1-463b-9b25-6eac18916a67
-function edgefunctions(ph::Meshes.Polyhedron, grid)
-
-	# as the facets should have outward-pointing normals, the edge functions
-	# as defined here should be negative for points inside the polyhedron
-
-	spacing = Meshes.spacing(grid)
-	xref = minimum(grid) - 0.5 * spacing
-
-	pls = planes(ph)
-	ntuple(length(pls)) do i
-		pl = pls[i]
-		normal = Meshes.cross(pl.u, pl.v)
-		Eref = Meshes.dot(xref - pl.p, normal)
-		dE = normal .* spacing
-		Meshes.Vec(dE..., Eref)
-	end
-end
-
-# ╔═╡ 6969c27d-6609-4f30-94fd-5d1c9a4fdc91
-begin
-	# test points using edge functions (Pineda, 1988)
-	# → only works for convex polyhedra!
-	function rasterize3d(poly::Meshes.Polyhedron{3,T},
-						 grid::Meshes.CartesianGrid{3,T},
-						 method::EdgeFunctions) where {T}
-		E = edgefunctions(poly, grid)
-		tol = convert(T, method.tol)
-		inds = rasterize(Meshes.boundingbox(poly), grid)
-		Iterators.filter(inds) do ind
-			all(Ei[1]*ind[1] + Ei[2]*ind[2] + Ei[3] * ind[3] + Ei[4] < tol for Ei in E)
-		end
-	end
-
-	function rasterize3d(poly, grid, ::Meshes.GrahamScan)
-
-		dx, dy, dz = Meshes.spacing(grid)
-		z0 = Meshes.coordinates(minimum(grid))[3] - 0.5 * dz
-
-		dims2d = size(grid)[1:2]
-		origin2d = Meshes.Point(Meshes.coordinates(minimum(grid))[1:2])
-		spacing2d = Meshes.SVector(dx, dy)
-		grid2d = Meshes.CartesianGrid(dims2d, origin2d, spacing2d)
-
-		segs = Meshes.faces(poly, 1)
-		inds = rasterize(Meshes.boundingbox(poly), grid)
-
-		Iterators.map(inds.indices[3]) do iz
-
-			# find intersection points with z-plane
-			pl = Meshes.Plane((0.,0.,z0 + iz * dz), (1.,0.,0.), (0.,1.,0.))
-			pts = segs |>
-				sgs -> Iterators.map(x->Meshes.intersect(pl, x), sgs) |>
-				pts -> Iterators.filter(x->!isnothing(x), pts) |>
-				pts -> Iterators.map(x->Meshes.Point2(Meshes.coordinates(x)[1:2]...), pts) |>
-				collect
-
-			# skip layer if no intersections
-			isempty(pts) && return ()
-
-			# construct polygon
-			ng = Meshes.hull(Meshes.PointSet(pts), Meshes.GrahamScan()) |>
-				Meshes.vertices |> Meshes.Ngon
-
-			Iterators.map(rasterize(ng, grid2d, EdgeFunctions())) do ind
-				CartesianIndex(ind.I..., iz)
-			end
-		end |> Iterators.flatten
-	end
-end
-
-# ╔═╡ 2d56559f-ed8a-4775-93e3-ff6c5f6e54c5
+# ╔═╡ 8148d1c8-8fea-4a7d-a1d4-23a256a10b8a
 let
-	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
-	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	ngon = Meshes.Ngon([(1.2,1.7), (1.8,1.8), (1.3,2.1), (1.1,1.9)])
+	grid = Meshes.CartesianGrid((256,256), (0.,0.), (4π/256, 2π/256))
+	#method = TraverseBoundingBox()
 	method = EdgeFunctions()
-	#@code_warntype planes(prism)
-	#@benchmark planes($prism)
-	#planes(prism) |> collect
-	#@code_warntype edgefunctions(prism, grid)
-	#@benchmark edgefunctions($prism, $grid)
-	#@code_warntype rasterize3d(prism, grid, method)
-	@benchmark maximum(rasterize3d($prism, $grid, $method))
+	function f(N)
+		imax = CartesianIndex(1,1)
+		for i=1:N
+			imax = maximum(rasterize(ngon, grid, method), init=imax)
+		end
+		imax
+	end
+	f(1000)
+	Profile.clear()
+	Profile.@profile f(100000)
+	PProf.pprof(web=false)
 end
+
+# ╔═╡ 342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
+md"## Rasterize 3D Prisms"
 
 # ╔═╡ 1dd29d36-dfd3-4bea-a29c-b190c5713575
 let
@@ -499,7 +467,7 @@ let
 	#method = Meshes.GrahamScan()
 	method = EdgeFunctions()
 
-	pts = map(rasterize3d(pr, gd, method)) do i
+	pts = map(rasterize(pr, gd, method)) do i
 		Meshes.centroid(gd[LinearIndices(size(gd))[i]])
 	end
 
@@ -514,7 +482,15 @@ end
 # ╔═╡ c49f0f3d-043c-4dc4-aab8-7fa7b5a23dda
 md"### Checks & Benchmarks"
 
+# ╔═╡ 70f8f6cb-47d2-4254-8032-f93a713f8e74
+let
+	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
+	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
+	@code_warntype rasterize(prism, grid, EdgeFunctions())
+end
+
 # ╔═╡ ad748fba-054c-4d74-b589-24dbc0d8afd1
+#=╠═╡
 let
 	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,-0.5))
 	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
@@ -522,19 +498,14 @@ let
 	re = rasterize3d(prism, grid, EdgeFunctions()) |> collect
 	@test rg == re
 end
+  ╠═╡ =#
 
 # ╔═╡ 8ffe0ca3-07bd-46ff-b525-8890acf98b68
 function runbenchmarks3d(method)
 	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
 	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
-	@benchmark maximum(rasterize3d($prism, $grid, $method))
+	@benchmark maximum(rasterize($prism, $grid, $method))
 end
-
-# ╔═╡ 3bd42cac-c944-44c3-a8d9-e4eb07d059d3
-# ╠═╡ disabled = true
-#=╠═╡
-runbenchmarks3d(Meshes.GrahamScan())
-  ╠═╡ =#
 
 # ╔═╡ a1588120-35c9-4719-8bca-757f56cc288a
 # ╠═╡ disabled = true
@@ -543,36 +514,273 @@ runbenchmarks3d(EdgeFunctions())
   ╠═╡ =#
 
 # ╔═╡ ba3a5975-631f-44d3-9d7f-96c89927b7a2
-# ╠═╡ disabled = true
-#=╠═╡
 runbenchmarks3d(EdgeFunctions())
-  ╠═╡ =#
 
 # ╔═╡ 59335790-2400-4e6b-aff5-5f3837503033
+# ╠═╡ disabled = true
+#=╠═╡
 let
 	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
 	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
-	#method = TraverseBoundingBox()
 	method = EdgeFunctions()
-	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	function f(N)
+		imax = CartesianIndex(1,1,1)
+		for i=1:N
+			imax = maximum(rasterize(prism, grid, method), init=imax)
+		end
+		imax
+	end
+	f(1000)
 	Profile.clear()
-	Profile.@profile [maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1)) for i=1:100]
+	Profile.@profile f(1000)
 	PProf.pprof(web=false)
-	#Profile.print()
 end
+  ╠═╡ =#
 
 # ╔═╡ 86244339-1362-48b0-8342-d4a6528138e3
+# ╠═╡ disabled = true
+#=╠═╡
 let
 	prism = Prism(Meshes.Point.([(1.2,1.7,0.1), (1.8,1.8,0.1), (1.3,2.1,0.2)]), (0.1,-0.1,0.5))
 	grid = Meshes.CartesianGrid((256,256,256), (0.,0.,0.), (4π/256, 2π/256, 1/256))
 	#method = TraverseBoundingBox()
 	method = EdgeFunctions()
-	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	maximum(rasterize(prism, grid, method), init = CartesianIndex(1,1,1))
 	Profile.Allocs.clear()
 	Profile.Allocs.start(sample_rate=1.0)
-	maximum(rasterize3d(prism, grid, method), init = CartesianIndex(1,1,1))
+	maximum(rasterize(prism, grid, method), init = CartesianIndex(1,1,1))
 	Profile.Allocs.stop()
 	PProf.Allocs.pprof(web=false)
+end
+  ╠═╡ =#
+
+# ╔═╡ fccdb7f1-4ca3-47ec-85a9-8d6b0b2e23c8
+md"## Rasterize Balls"
+
+# ╔═╡ e24d37db-79ea-45fc-a5f4-2b372b30f5a8
+let
+	b = Meshes.Ball((2,2,2), 1.5)
+
+	gd = Meshes.CartesianGrid((0.,0.,0.), (5.,5.,5.), dims=(10,10,10))
+
+	pts = map(rasterize(b, gd)) do i
+		Meshes.centroid(gd[LinearIndices(size(gd))[i]])
+	end
+
+	fig = Mke.Figure(resolution = (400, 400))
+	ax = Mke.Axis3(fig[1,1])
+	MeshViz.viz!(Meshes.PointSet(Meshes.vertices(gd)), color=:black, size=3)
+	isempty(pts) || MeshViz.viz!(pts, color=:yellow)
+	MeshViz.viz!(b, alpha=0.25, transparency=true)
+	fig
+end
+
+# ╔═╡ 35e13f7a-cde4-430c-9fe8-51c96c2e5af4
+function runbenchmarks_ball()
+	b = Meshes.Ball((2,2,2), 1.5)
+	gd = Meshes.CartesianGrid((0.,0.,0.), (5.,5.,5.), dims=(10,10,10))
+	@benchmark maximum(rasterize($b, $gd))
+end
+
+# ╔═╡ 86e0b953-924e-44d2-acd4-1515e732eb6e
+runbenchmarks_ball()
+
+# ╔═╡ 9069a1a1-31b2-4e5a-80fd-a410475f4d88
+md"## Distance Field"
+
+# ╔═╡ 3e13d529-2114-4495-a1eb-7669f2a068c7
+function plane_extrusions(ds, ns, mesh, grid, dmax; verbose = true)
+	# process distances to triangle surface
+	lininds = LinearIndices(size(grid))
+	for el in mesh
+		n = Meshes.normal(el)
+		v = Meshes.vertices(el)
+		prism = Prism(v .- (dmax * n,), 2 * dmax * n)
+		for i in rasterize(prism, grid, EdgeFunctions())
+			x = Meshes.centroid(grid[lininds[i]])
+			d = Meshes.dot(x - v[1], n)
+			d_old = ds[i]
+			if ismissing(d_old) || abs(d) < abs(d_old)
+				ds[i] = d
+			end
+		end
+	end
+end
+
+# ╔═╡ feaefa19-fb04-42c5-bdd7-b095542b9cd2
+function edge_extrusions(ds, ns, mesh, grid, dmax; verbose = true)
+
+	lininds = LinearIndices(size(grid))
+
+	# process distances to triangle edges
+	topo = convert(Meshes.HalfEdgeTopology, Meshes.topology(mesh))
+	e2v = Meshes.Boundary{1,0}(topo)
+	e2t = Meshes.Coboundary{1,2}(topo)
+	flat_edges = 0
+	border_edges = 0
+	for ie in 1:Meshes.nfacets(topo)
+
+		# determine connections of edges
+		neighbors = e2t(ie)
+		if length(neighbors) == 1
+			border_edges += 1
+			continue # border edges are skipped
+		end
+		nb1, nb2 = neighbors
+		n1, n2 = Meshes.normal.((mesh[nb1], mesh[nb2]))
+		p1, p2 = Meshes.vertices(mesh)[e2v(ie)]
+
+		# determine if edge is convex or concave
+		o = sign(Meshes.dot(Meshes.cross(p2-p1, n1), n2)) # positive for convex edge
+		if o == 0
+			flat_edges += 1
+			continue # skip flat edges
+		end
+
+		# mean normal at edge
+		nmid = n1 + n2
+		lmid = Meshes.norm(nmid)
+		lmid > 1e-3 || error("Degenerate mesh: acute edge angle")
+		nmid /= lmid
+
+		# length of prism sides required that distance is at least dmax everywhere
+		lside = dmax / Meshes.dot(nmid, n1)
+
+		# define prism for edge extrusion
+		base = Meshes.Vec(p1, p1 + lside * o * n1, p1 + lside * o * n2)
+		side = p2 - p1
+		prism = Prism(base, side)
+
+		# compute distance for points inside prism
+		for i in rasterize(prism, grid, EdgeFunctions())
+			x = Meshes.centroid(grid[lininds[i]])
+			d = o * Meshes.norm(Meshes.cross(x - p1, side)) / Meshes.norm(side)
+			d_old = ds[i]
+			if ismissing(d_old) || abs(d) < abs(d_old)
+				if abs(d) <= dmax
+					ds[i] = d
+				end
+			end
+		end
+	end
+	verbose && println("skipped $border_edges border edges, $flat_edges flat edges")
+end
+
+# ╔═╡ 419bc5f1-a68a-4e06-a344-c889bf49ac4f
+function vertex_extrusions(ds, ns, mesh, grid, dmax; verbose = true)
+
+	lininds = LinearIndices(size(grid))
+
+	topo = convert(Meshes.HalfEdgeTopology, Meshes.topology(mesh))
+	v2e = Meshes.Coboundary{0,1}(topo)
+	v2t = Meshes.Coboundary{0,2}(topo)
+	e2v = Meshes.Boundary{1,0}(topo)
+	t2v = Meshes.Boundary{2,0}(topo)
+	covertices(ivs, iv) = ivs[1] == iv ? (ivs[2], ivs[3]) : ivs[2] == iv ? (ivs[1], ivs[3]) : (ivs[1], ivs[2])
+	covertex(ivs, iv) = ivs[1] == iv ? ivs[2] : ivs[1]
+
+	vs = Meshes.vertices(mesh)
+	plane_points = 0
+	convex_points = 0
+	concave_points = 0
+	saddle_points = 0
+
+	for iv in Meshes.vertices(topo)
+
+		# build pseudo-normal vector
+		nα = Meshes.Vec(0,0,0)
+		for it in v2t(iv)
+			ni = Meshes.normal(mesh[it])
+			αi = acos(Meshes.dot((vs[ivt] - vs[iv] for ivt in covertices(t2v(it), iv))...))
+			nα += αi * ni
+		end
+		nα /= Meshes.norm(nα)
+
+		# count points above/below plane of pseudo-normal vector
+		nvb, nva = 0, 0
+		for ie in v2e(iv)
+			loc = Int(sign(Meshes.dot(vs[covertex(e2v(ie), iv)] - vs[iv], nα)))
+			nva += max(loc, 0)
+			nvb += max(-loc, 0)
+		end
+
+		# classify vertices	plane_points = 0
+		if nva == nvb == 0
+			plane_points += 1
+		elseif nva == 0 # convex vertex
+			convex_points += 1
+		elseif nvb == 0 # concave vertex
+			concave_points += 1
+		else
+			saddle_points += 1
+		end
+
+		# define ball for vertex extrusion
+		p = vs[iv]
+		ball = Meshes.Ball(p, dmax)
+
+		# compute distance for points inside ball
+		for i in rasterize(ball, grid)
+			x = Meshes.centroid(grid[lininds[i]])
+			p2x = x - p
+			d = Meshes.norm(p2x) * sign(Meshes.dot(p2x, nα))
+			abs(d) <= dmax || continue
+			d_old = ds[i]
+			if ismissing(d_old) || abs(d) < abs(d_old)
+				ds[i] = d
+			end
+		end
+	end
+	verbose && println("$plane_points plane points, $saddle_points saddle points, $convex_points convex points, $concave_points concave points")
+end
+
+# ╔═╡ e3df4b53-2523-421f-a308-abb4a40565f1
+function distancefield(mesh::Meshes.SimpleMesh{Dim,T},
+					   grid::Meshes.CartesianGrid{Dim,T},
+					   dmax::T; verbose = true) where {Dim,T}
+	#ds = Array{Union{Nothing,T}}(nothing, size(grid)...)
+	#ns = Array{Union{Nothing,Meshes.Vec{Dim,T}}}(nothing, size(grid)...)
+	ds = Array{Union{Missing,T}}(missing, size(grid)...)
+	ns = Array{Union{Missing,Meshes.Vec{Dim,T}}}(missing, size(grid)...)
+	#ds[3:17, 3:17, 4:17] .= 1
+
+	plane_extrusions(ds, ns, mesh, grid, dmax; verbose = verbose)
+	edge_extrusions(ds, ns, mesh, grid, dmax; verbose = verbose)
+	vertex_extrusions(ds, ns, mesh, grid, dmax; verbose = verbose)
+
+	Meshes.meshdata(grid, etable=(mesh_distance = ds, mesh_normal = ns))
+end
+
+# ╔═╡ 706fec20-d017-4ad8-a51b-9302edf2a01a
+function benchmark_sdf(N)
+	mesh = loadmesh("single-cube.stl", flip=true)
+	grid = Meshes.CartesianGrid((0.,0.,-0.5), (2.,2.,1.5), dims=(N,N,N))
+	@benchmark distancefield($mesh, $grid, $0.25, verbose=false)
+end
+
+# ╔═╡ 53e05dac-414f-41e5-9b27-c696c17cd9ed
+# ╠═╡ disabled = true
+#=╠═╡
+benchmark_sdf(80)
+  ╠═╡ =#
+
+# ╔═╡ c045f033-5ffd-45b1-9156-9b34e1724ac5
+let mesh = loadmesh("single-cube.stl", flip=true)
+	N = 80
+	grid = Meshes.CartesianGrid((0.,0.,-0.5), (2.,2.,1.5), dims=(N,N,N))
+	sdf = distancefield(mesh, grid, 0.25)
+	d = Meshes.values(sdf).mesh_distance
+
+	iplt = 20
+	nx, ny, nz = size(grid)
+	x = LinRange(0, 2, 1+2*nx)[2:2:end]
+	y = LinRange(0, 2, 1+2*ny)[2:2:end]
+	z = LinRange(0, 2, 1+2*nz)[2:2:end]
+	fig = Mke.Figure(resolution = (500, 400))
+	ax = Mke.Axis(fig[1,1], title="y=$(y[iplt])")
+	hm = Mke.heatmap!(x, y, d[:,iplt,:], colorrange = (-0.3,0.3), colormap = :oleron)
+	Mke.Colorbar(fig[1, 2], hm)
+	fig
 end
 
 # ╔═╡ ff1d3625-60e0-41dd-b889-0d2606378568
@@ -1250,39 +1458,53 @@ end
 # ╟─87aca29f-29df-44ba-9630-cc97e927a339
 # ╟─3671d217-c327-431f-9bfd-0f3e7fd4a01a
 # ╟─fc1826d8-f6ad-443f-bf65-2d5def8974a7
-# ╟─c4697b84-9cbd-4178-9aaf-72527bddde67
+# ╠═a96a6610-2199-414b-a97b-2f3c4a8d33d2
 # ╠═f33325a0-ca9e-4366-bc37-91dc414cad25
 # ╠═34b3f98c-1053-4aa7-ae0f-4aff49998c82
-# ╟─82d773d2-a328-41ca-b5c6-1836a393d6da
-# ╠═07d89b37-ffc9-49c1-9f7c-59e26f256fcd
+# ╟─4ca47d96-e749-4b06-9b1e-8fa2222a0936
+# ╠═908217b7-39f8-42bd-870b-92a2e872b7a7
 # ╠═a45d21c3-ea3b-4d11-8a4a-be519f1d7719
+# ╠═8b9a30c3-f4ab-4367-b2a0-a398da18cd1b
+# ╟─6969c27d-6609-4f30-94fd-5d1c9a4fdc91
+# ╟─5a1e55bb-7a96-46c4-85d0-cf40606860bf
+# ╠═73dfeea2-3faf-458c-ad41-7d592a581479
+# ╠═c3ce016a-b6bb-4bf6-aa48-4f5da7818c77
+# ╟─82d773d2-a328-41ca-b5c6-1836a393d6da
+# ╠═7999f361-6a5b-4712-b7cb-3904fbecd108
+# ╟─07d89b37-ffc9-49c1-9f7c-59e26f256fcd
 # ╟─17854bbc-543c-42bd-a126-943edda8c75a
 # ╟─2d4b6ea3-decb-4f6a-939d-1eafe956828e
 # ╟─3772c9e9-2db1-4978-a011-de19799f4e98
 # ╟─cb2c81fe-1987-42c9-aec8-badbbd0b1a0a
 # ╟─0d7b073f-90a3-4588-b4d1-5cc0b14e2bc5
 # ╟─409498df-51ed-49e8-85a9-efcdee401255
-# ╠═ef3d6f6e-327f-45b8-92c6-423dd52bac49
 # ╠═e0415fec-1d32-458d-ae55-87251486cbcb
 # ╠═01843255-f9a3-49a7-a989-b15b2e6932de
 # ╟─3c555464-59e2-4c98-bdfe-f64891f6b569
-# ╟─bf425675-9ee5-43de-a67a-b9098a751187
+# ╠═bf425675-9ee5-43de-a67a-b9098a751187
+# ╠═8148d1c8-8fea-4a7d-a1d4-23a256a10b8a
 # ╟─342ed4c3-ffcc-4a75-887d-5c9c6f8318d6
-# ╠═73dfeea2-3faf-458c-ad41-7d592a581479
-# ╠═c3ce016a-b6bb-4bf6-aa48-4f5da7818c77
-# ╠═3878eb72-1e01-4cf9-a31e-72fb1cd22496
-# ╠═2d56559f-ed8a-4775-93e3-ff6c5f6e54c5
-# ╠═78627653-63f1-463b-9b25-6eac18916a67
-# ╠═6969c27d-6609-4f30-94fd-5d1c9a4fdc91
-# ╟─1dd29d36-dfd3-4bea-a29c-b190c5713575
+# ╠═1dd29d36-dfd3-4bea-a29c-b190c5713575
 # ╟─c49f0f3d-043c-4dc4-aab8-7fa7b5a23dda
-# ╟─ad748fba-054c-4d74-b589-24dbc0d8afd1
-# ╟─8ffe0ca3-07bd-46ff-b525-8890acf98b68
-# ╠═3bd42cac-c944-44c3-a8d9-e4eb07d059d3
+# ╠═70f8f6cb-47d2-4254-8032-f93a713f8e74
+# ╠═ad748fba-054c-4d74-b589-24dbc0d8afd1
+# ╠═8ffe0ca3-07bd-46ff-b525-8890acf98b68
 # ╠═a1588120-35c9-4719-8bca-757f56cc288a
 # ╠═ba3a5975-631f-44d3-9d7f-96c89927b7a2
-# ╠═59335790-2400-4e6b-aff5-5f3837503033
-# ╠═86244339-1362-48b0-8342-d4a6528138e3
+# ╟─59335790-2400-4e6b-aff5-5f3837503033
+# ╟─86244339-1362-48b0-8342-d4a6528138e3
+# ╟─fccdb7f1-4ca3-47ec-85a9-8d6b0b2e23c8
+# ╠═e24d37db-79ea-45fc-a5f4-2b372b30f5a8
+# ╠═35e13f7a-cde4-430c-9fe8-51c96c2e5af4
+# ╠═86e0b953-924e-44d2-acd4-1515e732eb6e
+# ╟─9069a1a1-31b2-4e5a-80fd-a410475f4d88
+# ╠═3e13d529-2114-4495-a1eb-7669f2a068c7
+# ╠═feaefa19-fb04-42c5-bdd7-b095542b9cd2
+# ╠═419bc5f1-a68a-4e06-a344-c889bf49ac4f
+# ╠═e3df4b53-2523-421f-a308-abb4a40565f1
+# ╠═706fec20-d017-4ad8-a51b-9302edf2a01a
+# ╠═53e05dac-414f-41e5-9b27-c696c17cd9ed
+# ╠═c045f033-5ffd-45b1-9156-9b34e1724ac5
 # ╟─ff1d3625-60e0-41dd-b889-0d2606378568
 # ╟─a07eeeed-1d9d-4574-bad3-fabc4f0b0af9
 # ╟─d4065db9-6b48-4c1e-ae33-ed793fc91c28
