@@ -751,6 +751,20 @@ function distancefield(mesh::Meshes.SimpleMesh{Dim,T},
 	Meshes.meshdata(grid, etable=(mesh_distance = ds, mesh_normal = ns))
 end
 
+# ╔═╡ 86ed7d1a-7a78-48bc-8682-cf7172325341
+let
+	points = [(1,1,1),(2,1,1),(1,2,1),(1,1,2)]
+	connec = [(1,2,3),(1,3,4),(1,4,2),(4,3,2)]
+	mesh = Meshes.SimpleMesh(points, Meshes.connect.(connec))
+	grid = Meshes.CartesianGrid((0.,0.,0.), (3.,3.,3.), dims=(10,10,10))
+	sdf = distancefield(mesh, grid, 0.5)
+
+	#fig = Mke.Figure(resolution = (400, 400))
+	fig = MeshViz.viz(mesh, showfacets=true, color=1:Meshes.nelements(mesh))
+	MeshViz.viz!(Meshes.vertices(grid), size = 5)
+	fig
+end
+
 # ╔═╡ 706fec20-d017-4ad8-a51b-9302edf2a01a
 function benchmark_sdf(N)
 	mesh = loadmesh("single-cube.stl", flip=true)
@@ -1461,6 +1475,7 @@ end
 # ╠═a96a6610-2199-414b-a97b-2f3c4a8d33d2
 # ╠═f33325a0-ca9e-4366-bc37-91dc414cad25
 # ╠═34b3f98c-1053-4aa7-ae0f-4aff49998c82
+# ╠═86ed7d1a-7a78-48bc-8682-cf7172325341
 # ╟─4ca47d96-e749-4b06-9b1e-8fa2222a0936
 # ╠═908217b7-39f8-42bd-870b-92a2e872b7a7
 # ╠═a45d21c3-ea3b-4d11-8a4a-be519f1d7719
