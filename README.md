@@ -1,6 +1,6 @@
 # Compute Rasterized Representations of Polygon Meshes
 
-MeshRasterizations.jl provides functionality to compute a number of geometric quantities of
+MeshRasterization.jl provides functionality to compute a number of geometric quantities of
 a mesh for a large number of points, usually arranged in a Cartesian grid with regular or
 irregular grid spacing.
 
@@ -53,7 +53,7 @@ elements of `eachindex(points)` for collection of `Point`s.
 Computing a signed distance field:
 
 ```julia
-using Meshes, MeshRasterizations
+using Meshes, MeshRasterization
 points = [(1,1,1),(2,1,1),(1,2,1),(1,1,2)]
 connec = [(1,2,3),(1,3,4),(1,4,2),(4,3,2)]
 mesh = SimpleMesh(points, connect.(connec))
@@ -70,7 +70,7 @@ rasterize((:signed_distance, :direction, :closest_point), mesh, grid, dmax=1)
 Finding indices inside a geometry:
 
 ```julia
-julia> using MeshRasterizations.ScanConversion
+julia> using MeshRasterization.ScanConversion
 
 julia> geom = Ball((1, 1, 1.5), 1)
 Ball{3,Float64}(Point(1.5, 1.0, 1.0), 1.0))

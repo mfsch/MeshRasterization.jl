@@ -5,7 +5,7 @@ const fields = (:closest_point, :direction, :distance, :signed_distance)
     connec = [(1,2),(2,3),(3,1)]
     mesh = SimpleMesh(points, connect.(connec))
     pt = Point(1.25, 1.75)
-    r = [SDF.BruteForceMethod.closest_point(s, pt) for s in mesh]
+    r = [MeshRasterization.BruteForceMethod.closest_point(s, pt) for s in mesh]
     @test r[1][1] ≈ Point(1.25, 1)
     @test r[2][1] ≈ Point(1.25, 1.75)
     @test r[3][1] ≈ Point(1, 1.75)

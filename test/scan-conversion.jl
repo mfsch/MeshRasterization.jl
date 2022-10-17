@@ -1,4 +1,4 @@
-using SDF.ScanConversion
+using MeshRasterization.ScanConversion
 
 const methods = (SimpleScan, EdgeFunctionScan)
 const cases2d = [ # grid = (dims, origin, spacing[, offset])

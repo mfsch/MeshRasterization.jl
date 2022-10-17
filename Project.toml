@@ -1,4 +1,4 @@
-name = "SDF"
+name = "MeshRasterization"
 uuid = "5b6d5738-dc18-4038-bd16-685ddbeb7f78"
 authors = ["Manuel F. Schmid <m.schmid@civil.ubc.ca>"]
 version = "0.1.0"

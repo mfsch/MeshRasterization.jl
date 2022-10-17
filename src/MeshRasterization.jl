@@ -1,4 +1,4 @@
-module SDF
+module MeshRasterization
 
 include("meshes-piracy.jl")
 include("prism.jl")
