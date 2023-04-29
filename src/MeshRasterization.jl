@@ -8,10 +8,11 @@ include("scan-conversion.jl")
 include("rasterization.jl")
 include("brute-force.jl")
 include("csc.jl")
+include("mesh-input.jl")
 
-using .Rasterization, .CSCMethod, .BruteForceMethod
+using .Rasterization, .CSCMethod, .BruteForceMethod, .MeshInput
 
 export closest_point, direction, distance, signed_distance, rasterize, rasterize!,
-        BruteForceRasterization, CharacteristicScanConversion
+        BruteForceRasterization, CharacteristicScanConversion, loadmesh
 
 end # module
