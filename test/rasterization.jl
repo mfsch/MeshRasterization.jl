@@ -167,6 +167,13 @@ end
     @test rb.closest_point == rc.closest_point # points are compared approximately
 end
 
+@testset "Propagation of maximum value" begin
+    dmax = 1.0
+    p(arr) = MeshRasterization.CSCMethod.propagate_dmax!(arr, dmax)
+    @test p([1.0, Inf, 1.0]) == ones(3)
+    @test p(zeros(3)) == zeros(3)
+end
+
 @testset "Coordinates on boundary" begin
     pts = [(0, 1, 0), (0.5, 0.5, 0), (0, 0, 0), (1, 0, 0), (1, 1, 0)]
     els = [(1, 2, 3), (2, 4, 3), (1, 5, 4)]

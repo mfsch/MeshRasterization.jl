@@ -16,6 +16,8 @@ export CharacteristicScanConversion
 
 struct CharacteristicScanConversion{T} <: RasterizationMethod
     dmax::T
+    fill::Bool
+    CharacteristicScanConversion(dmax::T; fill = true) where T = new{T}(dmax, fill)
 end
 
 function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points::Raster{Dim,T},
@@ -24,6 +26,13 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points::Raster{Di
 
     dmax = abs(method.dmax)
     topo = topology(mesh)
+
+    # initialize with the maximum possible distance if dense output is requested
+    # (will be overwritten with signed dmax at the end)
+    if method.fill
+        haskey(data, :distance) && (data.distance .= typemax(T))
+        haskey(data, :signed_distance) && (data.signed_distance .= typemax(T))
+    end
 
     # plane extrusions
     for face in 1:nfaces(topo, 2)
@@ -183,7 +192,51 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points::Raster{Di
         end
     end
 
+    if method.fill
+        haskey(data, :distance) && propagate_dmax!(data.distance, dmax)
+        haskey(data, :signed_distance) && propagate_dmax!(data.signed_distance, dmax)
+    end
+
     data
+end
+
+function propagate_dmax!(arr::AbstractArray{T,N}, dmax, placeholder::T = typemax(T)) where {T,N}
+
+    dmax = abs(convert(T, dmax))
+    signed_dmax(ref::T) = ref < zero(T) ? -abs(dmax) : ref > zero(T) ? abs(dmax) :
+            error("Could not propagate dmax due to zero on perimeter")
+
+    # the function loops over slices along the last index and recursively
+    # applies the propagation to each slice
+    inds = axes(arr, N)
+
+    # the first pass needs to skip values until the first non-placeholder value
+    # is found
+    skipped = 0
+    reference::T = placeholder
+    for ind in inds
+        slice = selectdim(arr, N, ind)
+        N > 1 && propagate_dmax!(slice, dmax, placeholder)
+        if first(slice) != placeholder
+            reference = first(slice)
+        elseif reference == placeholder
+            skipped += 1
+        else
+            slice .= signed_dmax(reference)
+        end
+    end
+
+    # the second pass fills in the indices that were skipped, unless everything
+    # was skipped, in which case the input is left as is and has to be handled
+    # appropriately by the caller
+    if 0 < skipped < length(inds)
+        filler = signed_dmax(first(selectdim(arr, N, 1+skipped)))
+        for ind in inds[1:skipped]
+            selectdim(arr, N, ind) .= filler
+        end
+    end
+
+    arr
 end
 
 end # module
