@@ -3,10 +3,9 @@ module Hyperplanes
 using LinearAlgebra: cross
 using Meshes: Point, Vec, Ngon, Polyhedron, Polytope, Primitive,
               vertices, facets
+using ..Prisms: Prism
 
 import Meshes: normal
-
-using ..Prisms: Prism
 
 struct Hyperplane{Dim,T} <: Primitive{Dim,T}
     p::Point{Dim,T}

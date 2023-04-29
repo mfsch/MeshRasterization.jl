@@ -1,47 +1,85 @@
 module Rasterization
 
-import LinearAlgebra: dot, norm
-import Meshes: Point, Vec, normal, CartesianGrid, centroid,
-    SimpleMesh, vertices, topology, nelements, element,
-    Coboundary, indices, materialize
+using LinearAlgebra: dot, norm
+using Meshes: Vec, Point, SimpleMesh, HalfEdgeTopology, normal, vertices,
+              topology, nelements, element, Coboundary, indices, materialize
+using ..Rasters: Raster, dimensions
 
-# ----------------
-# Shared Interface
-# ----------------
+export closest_point, direction, distance, signed_distance, rasterize, rasterize!
 
 abstract type RasterizationMethod end
 function rasterize! end
-function rasterize end
+default_method() = nothing
 
+function closest_point(mesh, points)
+    rasterize((:closest_point,), mesh, points).closest_point
+end
 
-# ----------------------------
-# Raster Point Representations
-# ----------------------------
+function direction(mesh, points, args...)
+    rasterize((:direction,), mesh, points, args...).direction
+end
 
-pointdims(points::Tuple) = length.(points)
-pointdims(points) = size(points)
+function distance(mesh, points, args...)
+    rasterize((:distance,), mesh, points, args...).distance
+end
 
-getpoint(points, ind) = points[ind]
-getpoint(points::Tuple, ind) = Point(getindex.(points, Tuple(ind)))
-getpoint(grid::CartesianGrid, ind) = centroid(grid[ind])
+function signed_distance(mesh, points, args...)
+    rasterize((:signed_distance,), mesh, points, args...).signed_distance
+end
 
-pointindices(points) = eachindex(points)
-pointindices(points::Tuple) = CartesianIndices(eachindex.(points))
-pointindices(grid::CartesianGrid) = CartesianIndices(size(grid))
+"""
+    rasterize(fields, mesh, points)
+
+Compute rasterized representations of a `mesh` at a collection of `points`.
+
+# Arguments
+
+- `fields`: a list of symbols that define the raster data included in the output
+  - `:closest_point`: the closest point on the mesh boundary (`Point`)
+  - `:direction`: unit vector in the direction of the closest point (`Vec`)
+  - `:distance`: the (absolute) distance to the closest point
+  - `:signed_distance`: the signed distance to the closest point
+- `mesh`: the `SimpleMesh`
+- `points`: the point coordinates for which the `fields` are computed; one of the following:
+  - `Tuple` with a list of coordinates for each dimension (usually a kind of
+      `AbstractRange`)
+  - `CartesianGrid`, using the coordinates of the centroids of the grid cells
+  - a collection of `Point`s
+
+# Returns
+
+- `NamedTuple` with an `Array` of the same dimension as `points` for each of the `fields`
+"""
+function rasterize(fields::NTuple{N,Symbol}, mesh::SimpleMesh{Dim,T}, points::Raster{Dim,T},
+        method = default_method()) where {N,Dim,T}
+    dims = dimensions(points)
+    data = map(fields) do field
+        if field in (:distance, :signed_distance)
+            Array{T,length(dims)}(undef, dims)
+        elseif field in (:closest_point, )
+            zeros(Point{Dim,T}, dims)
+        elseif field in (:direction, )
+            zeros(Vec{Dim,T}, dims)
+        else
+            error("Unsupported field: `$field`")
+        end
+    end
+    if Dim == 3 && !(topology(mesh) isa HalfEdgeTopology)
+        mesh = SimpleMesh(vertices(mesh), convert(HalfEdgeTopology, topology(mesh)))
+    end
+    rasterize!(NamedTuple{fields}(data), mesh, points, method)
+end
 
 
 # -----------------
 # Output Management
 # -----------------
 
-infinity(::Type{Float64}) = Inf
-infinity(::Type{Float32}) = Inf32
-
 function current_distance(data, ind)
     if haskey(data, :distance)
         data.distance[ind]
     elseif haskey(data, :signed_distance)
-        abs(data.signed_distance)[ind]
+        abs(data.signed_distance[ind])
     else
         error("Data does not contain any field for distance")
     end
@@ -51,7 +89,7 @@ function reset_distance!(data)
     for key in (:distance, :signed_distance)
         haskey(data, key) || continue
         values = getproperty(data, key)
-        fill!(values, infinity(eltype(values)))
+        fill!(values, typemax(eltype(values)))
     end
 end
 

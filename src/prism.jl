@@ -1,8 +1,8 @@
 module Prisms
 
-import LinearAlgebra: dot, cross
-
+using LinearAlgebra: dot, cross
 using Meshes: Point, Vec, Polyhedron, SimpleMesh, connect, materialize
+
 import Meshes: nvertices, vertices, nfacets, facets, boundary
 
 struct Prism{Dim,T,V<:AbstractVector{Point{Dim,T}}} <: Polyhedron{Dim,T}

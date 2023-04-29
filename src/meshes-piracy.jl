@@ -9,10 +9,18 @@ methods should ideally be moved to Meshes.jl.
 module MeshesPiracy
 
 using LinearAlgebra: norm
-using Meshes: Point, Vec, Segment, Ngon, Polytope, SimpleTopology, HalfEdgeTopology, CartesianGrid, vertices, indices, Connectivity, connect
+using Meshes: Point, Vec, Segment, Ngon, Polytope, SimpleTopology,
+              HalfEdgeTopology, CartesianGrid, vertices, indices, Connectivity,
+              connect, coordinates
 
 import Base: zero, convert, contains
-import Meshes: nfacets, facets, nfaces, faces, element, normal
+import Meshes: nfacets, facets, nfaces, faces, element, normal, centroid
+
+# allow cartesian indices for centroid function
+function centroid(g::CartesianGrid{Dim}, ind::CartesianIndex) where {Dim}
+  neworigin = coordinates(g.origin) .+ g.spacing ./ 2
+  Point(ntuple(i -> neworigin[i] + (ind[i] - g.offset[i])*g.spacing[i], Dim))
+end
 
 # compute normals for other dimensions of polygons etc.
 function normal(ngon::Ngon{2,2})

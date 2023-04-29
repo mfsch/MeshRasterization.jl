@@ -1,10 +1,9 @@
 module ScanConversion
 
 using LinearAlgebra: dot
-using Meshes: Geometry, CartesianGrid, Box, Vec, Polytope,
-              boundingbox, spacing
-
+using Meshes: Geometry, Box, Vec, Polytope, boundingbox
 using ..Hyperplanes: hyperplanes
+using ..Rasters: Raster, origin, spacing, dimensions
 
 export SimpleScan, EdgeFunctionScan, scan
 
@@ -54,28 +53,26 @@ function scan end
 
 scan(geom, raster) = scan(geom, raster, scanmethod(geom, raster))
 
-
-
 function scan(box::Box{Dim,T},
-        grid::CartesianGrid{Dim,T}) where {Dim,T}
+        grid::Raster{Dim,T}) where {Dim,T}
     dx = spacing(grid)
-    imin = (minimum(box) - minimum(grid)) ./ dx .+ 1 |>
+    imin = (minimum(box) - origin(grid)) ./ dx .+ 1//2 |>
     i -> floor.(Int, i) |>
     i -> max.(i, 1)
-    imax = (maximum(box) - minimum(grid)) ./ dx |>
+    imax = (maximum(box) - origin(grid)) ./ dx .- 1//2 |>
     i -> ceil.(Int, i) |>
-    i -> min.(i, size(grid))
+    i -> min.(i, dimensions(grid))
     inds = ntuple(i -> imin[i]:imax[i], Dim)
     CartesianIndices(inds)
 end
 
 # test if point in polygon for all points in bounding box
 function scan(geom::Geometry{Dim,T},
-        grid::CartesianGrid{Dim,T},
+        grid::Raster{Dim,T},
         ::SimpleScan) where {Dim,T}
 
-    Δgd = spacing(grid) |> Vec
-    xref = minimum(grid) - 0.5 * Δgd
+    Δgd = spacing(grid)
+    xref = origin(grid)
 
     inds = scan(boundingbox(geom), grid)
     Iterators.filter(inds) do i
@@ -85,8 +82,8 @@ function scan(geom::Geometry{Dim,T},
 end
 
 function scan(polytope::Polytope{Dim,Dim,T},
-        grid::CartesianGrid{Dim,T},
-       method::EdgeFunctionScan) where {Dim,T}
+        grid::Raster{Dim,T},
+        method::EdgeFunctionScan) where {Dim,T}
     E = edgefunctions(polytope, grid)
     tol = convert(T, method.tol)
     inds = scan(boundingbox(polytope), grid)
@@ -96,14 +93,13 @@ function scan(polytope::Polytope{Dim,Dim,T},
 end
 
 function edgefunctions(polytope::Polytope{Dim,Dim,T},
-        grid::CartesianGrid{Dim,T},
-        pos = T(0.5)) where {Dim,T}
-    dx = spacing(grid) |> Vec
-    xref = minimum(grid) + (pos .- 1) .* dx
+        grid::Raster{Dim,T}) where {Dim,T}
+    Δgd = spacing(grid)
+    xref = origin(grid)
     map(hyperplanes(polytope)) do hp
         # as the facets should have outward-pointing normals, the edge functions
         # as defined here should be negative for points inside the polyhedron
-        dE = hp.n .* dx
+        dE = hp.n .* Δgd
         Eref = dot(xref - hp.p, hp.n)
         Vec(dE..., Eref)
     end

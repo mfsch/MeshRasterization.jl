@@ -1,19 +1,21 @@
 module BruteForceMethod
 
 using LinearAlgebra: norm, dot
+using Meshes: Point, Vec, Segment, Triangle, vertices, normal, SimpleMesh,
+              HalfEdgeTopology, Boundary, Coboundary, topology, nfaces,
+              element, facet, indices, connect
+using ..Hyperplanes: Hyperplane
+using ..Rasters: Raster, dimensions, getpoint
+using ..Rasterization: RasterizationMethod, current_distance, reset_distance!,
+                       vertex_orientation
 
-# Meshes.jl: basic functionality
-using Meshes: Point, Vec, Segment, Triangle, vertices, normal
+import ..Rasterization: rasterize!, default_method
 
-# Meshes.jl: mesh & topology
-using Meshes: SimpleMesh, HalfEdgeTopology, Boundary, Coboundary,
-    topology, nfaces, element, facet, indices, connect
-
-import ..Hyperplanes: Hyperplane
-import ..Rasterization: RasterizationMethod, rasterize!, pointindices,
-    getpoint, current_distance, reset_distance!, vertex_orientation
+export BruteForceRasterization
 
 struct BruteForceRasterization <: RasterizationMethod end
+
+default_method() = BruteForceRasterization()
 
 function closest_point(s::Segment{Dim,T}, pt::Point{Dim,T}) where {Dim,T}
     v1, v2 = vertices(s)
@@ -60,9 +62,10 @@ function closest_point(t::Triangle{Dim,T}, pt::Point{Dim,T}) where {Dim,T}
     cpt => dist
 end
 
-function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim}, points, ::BruteForceRasterization) where {Dim}
+function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points::Raster{Dim,T},
+        ::BruteForceRasterization) where {Dim,T}
     reset_distance!(data)
-    for ind in pointindices(points)
+    for ind in CartesianIndices(dimensions(points))
         point = getpoint(points, ind)
         #println("$point:")
         for face in 1:nfaces(mesh, Dim - 1)
@@ -92,12 +95,12 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim}, points, ::BruteForc
             end
 
             if haskey(data, :signed_distance)
-                T = eltype(data.signed_distance)
+                sdf_type = eltype(data.signed_distance)
 
                 # use `>=` instead of `sign()` to avoid multiplying by zero
                 #sign = dot(point - meshpoint, normal(element)) >= zero(T) ? 1 : -1
                 type, n = face_orientation(mesh, face, meshpoint)
-                sign = dot(point - meshpoint, n) >= zero(T) ? 1 : -1
+                sign = dot(point - meshpoint, n) >= zero(sdf_type) ? 1 : -1
                 #println(" - set o($type)=$sign for $meshpoint at d=$distance")
                 data.signed_distance[ind] = distance * sign
             end

@@ -1,32 +1,28 @@
 module CSCMethod
 
 using LinearAlgebra: norm, dot, cross
+using Meshes: Vec, Ball, vertices, normal, isconvex, SimpleMesh, Boundary,
+              Coboundary, topology, nfaces, element
+using ..Hyperplanes: Hyperplane
+using ..Prisms: Prism
+using ..Rasters: Raster, getpoint
+using ..ScanConversion: EdgeFunctionScan, scan
+using ..Rasterization: RasterizationMethod, current_distance, reset_distance!,
+                       vertex_orientation
 
-# Meshes.jl: basic functionality
-using Meshes: Vec, Ball, vertices, normal, isconvex
+import ..Rasterization: rasterize!
 
-# Meshes.jl: mesh & topology
-using Meshes: SimpleMesh, Boundary, Coboundary,
-    topology, nfaces, element
-
-# Meshes.jl: grid
-using Meshes: CartesianGrid, centroid
-
-import ..Hyperplanes: Hyperplane
-import ..Prisms: Prism
-import ..ScanConversion: EdgeFunctionScan, scan
-import ..Rasterization: RasterizationMethod, rasterize!, getpoint,
-    current_distance, reset_distance!, vertex_orientation
+export CharacteristicScanConversion
 
 struct CharacteristicScanConversion{T} <: RasterizationMethod
     dmax::T
 end
 
-function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points,
+function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points::Raster{Dim,T},
         method::CharacteristicScanConversion; verbose = false) where {Dim,T}
     reset_distance!(data)
 
-    dmax = method.dmax
+    dmax = abs(method.dmax)
     topo = topology(mesh)
 
     # plane extrusions
@@ -43,7 +39,7 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points,
             distance = abs(signed_distance)
 
             # only update if the new distance is shorter
-            if distance >= current_distance(data, ind)
+            if distance > dmax || distance >= current_distance(data, ind)
                 continue
             end
 
@@ -78,7 +74,7 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points,
         faces = edge2faces(edge)
         if length(faces) == 1
             # TODO: handle border edges
-            println("skipped border edge")
+            verbose && println("skipped border edge")
             continue
         end
 
@@ -110,7 +106,7 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points,
             signed_distance = sign * distance
 
             # only update if the new distance is shorter
-            if distance >= current_distance(data, ind)
+            if distance > dmax || distance >= current_distance(data, ind)
                 continue
             end
 
@@ -159,7 +155,7 @@ function rasterize!(data::NamedTuple, mesh::SimpleMesh{Dim,T}, points,
             distance = norm(dir)
 
             # only update if the new distance is shorter
-            if distance >= current_distance(data, ind)
+            if distance > dmax || distance >= current_distance(data, ind)
                 continue
             end
 

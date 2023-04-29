@@ -65,7 +65,7 @@ end
     points = [(0,0), (2,0), (2,1), (3,0), (5,0), (5,5), (3,5), (2,4), (2,5), (0,5)]
     connec = [i == length(points) ? (i,1) : (i,i+1) for i=1:length(points)]
     mesh = SimpleMesh(points, connect.(connec))
-    grid = (1:4, 1:4)
+    grid = (1:4.0, 1:4.0)
     r = rasterize(fields, mesh, grid)
     @test r.signed_distance ≈ - r.distance
 end
@@ -116,7 +116,6 @@ end
     end
 end
 
-
 @testset "Larger 3D rasterization" begin
 
     points = [(0,0,0),(3,1,1),(1,3,1),(1,1,3)]
@@ -166,6 +165,17 @@ end
     @test rb.signed_distance ≈ rc.signed_distance
     @test rb.direction ≈ rc.direction
     @test rb.closest_point == rc.closest_point # points are compared approximately
+end
+
+@testset "Coordinates on boundary" begin
+    pts = [(0, 1, 0), (0.5, 0.5, 0), (0, 0, 0), (1, 0, 0), (1, 1, 0)]
+    els = [(1, 2, 3), (2, 4, 3), (1, 5, 4)]
+    mesh = SimpleMesh([Float64.(pt) for pt in pts], connect.(els))
+    x = range(0, 1, 32+1)[1:end-1]
+    raster = (x, x, 0:1.0:0)
+    rb = signed_distance(mesh, raster)
+    rc = signed_distance(mesh, raster, CharacteristicScanConversion(1))
+    @test rb ≈ rc
 end
 
 @testset "Performance checks" begin

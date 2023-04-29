@@ -26,15 +26,25 @@ const cases2d = [ # grid = (dims, origin, spacing[, offset])
                    ]
 
 
-
-@testset "$(string(method))" for method in methods
-    @testset "$(case.label)" for case in cases2d
-        ng = Ngon(case.points...)
-        gd = CartesianGrid(case.grid[1],
-                           convert.(Float64, case.grid[2]),
-                           convert.(Float64, case.grid[3]), case.grid[4:end]...)
-        broken = method in get(case, :broken, ())
-        @test [x.I for x in scan(ng, gd, method())] ==
-        collect(case.result) broken=broken
+for raster in ("CartesianGrid", "ranges")
+    @testset "$(string(method)) for $(raster)" for method in methods
+        @testset "$(case.label)" for case in cases2d
+            ng = Ngon(case.points...)
+            gd = if raster == "CartesianGrid"
+                CartesianGrid(case.grid[1], convert.(Float64, case.grid[2]),
+                              convert.(Float64, case.grid[3]), case.grid[4:end]...)
+            elseif raster == "ranges"
+                ox, oy = length(case.grid) > 3 ? case.grid[4] : (1, 1)
+                lx, ly = case.grid[1]
+                dx, dy = case.grid[3]
+                x0, y0 = case.grid[2] .+ (1 .- (ox, oy)) .* (dx, dy)
+                rx = range(x0+dx/2, x0+lx-dx/2, round(Int, lx/dx))
+                ry = range(y0+dy/2, y0+ly-dy/2, round(Int, ly/dy))
+                (rx, ry)
+            end
+            broken = method in get(case, :broken, ())
+            @test [x.I for x in scan(ng, gd, method())] ==
+            collect(case.result) broken=broken
+        end
     end
 end
