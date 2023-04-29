@@ -1,6 +1,6 @@
 name = "MeshRasterization"
 uuid = "5b6d5738-dc18-4038-bd16-685ddbeb7f78"
-authors = ["Manuel F. Schmid <m.schmid@civil.ubc.ca>"]
+authors = ["Manuel F. Schmid <mfs2173@columbia.edu>"]
 version = "0.1.0"
 
 [deps]
